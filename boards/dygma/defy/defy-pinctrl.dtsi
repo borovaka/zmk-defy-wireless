@@ -1,0 +1,25 @@
+/*
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <zephyr/dt-bindings/pinctrl/rpi-pico-rp2040-pinctrl.h>
+
+&pinctrl {
+    /* SPI0, shared by the IS31FL3743B, the nRF52820 and the cable to the Neuron. */
+    spi0_default: spi0_default {
+        group1 {
+            pinmux = <SPI0_TX_P23>, <SPI0_SCK_P22>;
+        };
+        group2 {
+            pinmux = <SPI0_RX_P20>;
+            input-enable;
+        };
+    };
+
+    /* Underglow data from PIO0. The driver inverts the output, see defy_leds. */
+    underglow_default: underglow_default {
+        group1 {
+            pinmux = <PIO0_P13>;
+        };
+    };
+};

@@ -1,0 +1,42 @@
+/*
+ * The Defy's LED drivers on native_sim: the per-key LED node on the emulated
+ * SPI bus, and the joined LED strip over two fake strips, with the underglow
+ * supply on the emulated GPIO port.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <zephyr/dt-bindings/led/led.h>
+#include "../../../../boards/dygma/defy/defy-key-leds.h"
+
+/ {
+    fake_keys: fake-keys {
+        compatible = "vnd,led-strip";
+        chain-length = <3>;
+    };
+
+    fake_underglow: fake-underglow {
+        compatible = "vnd,led-strip";
+        chain-length = <4>;
+    };
+
+    leds: defy-leds {
+        compatible = "dygma,defy-leds";
+        chain-length = <7>;
+        key-leds = <&fake_keys>;
+        underglow = <&fake_underglow>;
+        underglow-power-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+&spi0 {
+    key_leds: is31fl3743b@0 {
+        compatible = "issi,is31fl3743b";
+        reg = <0>;
+        spi-max-frequency = <2000000>;
+        sdb-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+        chain-length = <DEFY_KEY_LED_COUNT>;
+        color-mapping = <LED_COLOR_ID_RED LED_COLOR_ID_GREEN LED_COLOR_ID_BLUE LED_COLOR_ID_WHITE>;
+        pwm-registers = DEFY_KEY_LED_PWM_REGISTERS;
+    };
+};

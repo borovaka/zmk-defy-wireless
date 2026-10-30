@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+
+board:
+  name: defy_neuron
+  full_name: Dygma Neuron, wireless (nRF52833)
+  vendor: dygma
+  socs:
+    - name: nrf52833
+      variants:
+        - name: zmk

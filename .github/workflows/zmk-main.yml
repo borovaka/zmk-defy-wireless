@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+#
+# Builds and tests the module every week against ZMK's main branch, in place of
+# the revision config/west.yml pins, to show early what the next ZMK upgrade
+# needs. It blocks nothing. A failed build names the use to review, as
+# README.md's "Upgrading ZMK" describes; ZMK's main branch may also need a newer
+# container image than the one scripts/zmk pins.
+#
+# Actions are pinned to commits, with the release in a comment;
+# .github/dependabot.yml keeps them current.
+name: ZMK main
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  zmk-main:
+    name: Against ZMK main
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    container:
+      image: zmkfirmware/zmk-dev-arm@sha256:77b62cbc6c62ca0026ed9eb511dd7fc2a13692d1b9ddbaf92bca510612390db8
+    env:
+      # As scripts/zmk sets it: without it ccache refuses every ARM compile.
+      CCACHE_IGNOREOPTIONS: "-specs=*"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Follow ZMK main
+        run: sed -i 's/^\( *revision:\).*/\1 main/' config/west.yml
+      - id: setup
+        run: scripts/setup --container
+      - run: python3 scripts/build --container all
+      # The suites run even when a build fails: they show the rest of the work.
+      - run: python3 scripts/test --container
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}

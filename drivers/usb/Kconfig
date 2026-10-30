@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_USB_REPORT_RECOVERY
+    bool "Defy USB held-state recovery after host wake"
+    default y
+    depends on ZMK_USB && ZMK_SPLIT_ROLE_CENTRAL
+    depends on DEFY_HYBRID
+    depends on !ZMK_USB_BOOT
+    help
+      Sends the current keyboard, consumer and, with ZMK_POINTING, mouse
+      reports again after a USB resume, retries failed sends, and asks the
+      host to wake only for a newly pressed key. See docs/power-and-wake.md.
+
+config DEFY_USB_REPORT_TRACE
+    bool "Trace Defy USB status and report modifiers"
+    depends on DEFY_USB_REPORT_RECOVERY && LOG
+    help
+      Logs USB status, endpoint changes and the modifiers of each report.
+      The neuron-hybrid-log build turns it on.
+
+config DEFY_USB_POSITION_TRACE
+    bool "Log each key position event"
+    depends on DEFY_USB_REPORT_TRACE
+    help
+      Also logs the position of each key event, to line presses up with the
+      USB reports.

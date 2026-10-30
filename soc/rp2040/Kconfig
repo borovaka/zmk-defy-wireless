@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_RP2040_FACTORY_HANDOFF
+    bool "Defy RP2040 factory watchdog handoff"
+    default y
+    depends on SOC_RP2040 && FLASH_LOAD_OFFSET = 0x6100
+    select SOC_RESET_HOOK
+    select INIT_ARCH_HW_AT_BOOT
+    help
+      For an image that Dygma's RP2040 bootloader starts at 0x6100. The
+      bootloader leaves its watchdog running, which the reset hook stops
+      before Zephyr starts. With DEFY_FATAL_RECOVERY the hook also runs
+      defy_fatal_recovery_boot(), which counts quick faults.

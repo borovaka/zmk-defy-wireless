@@ -1,0 +1,20 @@
+/*
+ * A half's cable port, as defy_wired_peripheral and defy_hybrid_peripheral
+ * see it: chip select 2 of a test SPI controller that the suites fake.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+&spi0 {
+    compatible = "dygma,wired-test-spi";
+    cs-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>,
+               <&gpio0 18 GPIO_ACTIVE_LOW>,
+               <&gpio0 21 GPIO_ACTIVE_LOW>;
+
+    wired_half: wired@2 {
+        compatible = "dygma,defy-wired-peripheral";
+        reg = <2>;
+        spi-max-frequency = <1000000>;
+        half-id = <0>;
+    };
+};

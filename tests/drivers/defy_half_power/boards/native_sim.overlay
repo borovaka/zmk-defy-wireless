@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: MIT */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+/ {
+    kscan0: kscan {
+        compatible = "dygma,matrix-power-test";
+        row-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>, <&gpio0 9 GPIO_ACTIVE_LOW>,
+                    <&gpio0 10 GPIO_ACTIVE_LOW>, <&gpio0 11 GPIO_ACTIVE_LOW>,
+                    <&gpio0 12 GPIO_ACTIVE_LOW>;
+        col-gpios = <&gpio0 0 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 5 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>,
+                    <&gpio0 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+    };
+};

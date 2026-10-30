@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+
+boards:
+  - name: defy_left
+    full_name: Dygma Defy, left half
+    vendor: dygma
+    socs:
+      - name: rp2040
+        variants:
+          - name: zmk
+  - name: defy_right
+    full_name: Dygma Defy, right half
+    vendor: dygma
+    socs:
+      - name: rp2040
+        variants:
+          - name: zmk

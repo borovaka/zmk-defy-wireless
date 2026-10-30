@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Runs the Python tests and the host C suites, built under sanitizers, side by side."""
+
+import os
+from pathlib import Path
+import shutil
+import sys
+from tempfile import mkdtemp
+
+from test_runner import run_command, run_tasks, summarize
+
+
+PYTHON_SUITES = ("tests/scripts",)
+
+
+def compile_command(root, source, executable, clang):
+    # What each suite needs besides its main.c and include/: module sources and include
+    # directories.
+    dependencies = {
+        "defy_battery": ["-I", str(root / "include"),
+                         str(root / "battery/defy_battery_protocol.c")],
+        "defy_battery_behavior": ["-I", str(root / "include")],
+        "defy_battery_filter": ["-I", str(root / "include"),
+                                "-I", str(root / "apps/defy_radio/src"),
+                                str(root / "battery/defy_battery_protocol.c"),
+                                str(root / "apps/defy_radio/src/battery_filter.c")],
+        "defy_radio_boot": ["-I", str(root / "apps/defy_radio/src"),
+                            str(root / "apps/defy_radio/src/boot.c"),
+                            str(root / "apps/defy_radio/src/startup.c")],
+        "defy_radio_factory": ["-I", str(root / "include"),
+                               str(root / "drivers/bluetooth/defy_radio_factory.c"),
+                               str(root / "drivers/bluetooth/defy_radio_install.c")],
+        "defy_wired": ["-I", str(root / "include"),
+                      str(root / "drivers/split/defy_wired_protocol.c")],
+        "defy_fatal_recovery": ["-I", str(root / "tests/fakes/rp2040"), "-I", str(root / "include")],
+        "defy_loader_start": ["-I", str(root / "include")],
+        "defy_loader_uf2": ["-I", str(root / "include")],
+    }
+    return [
+        clang, "-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG",
+        "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+        "-I", str(source.parent / "include"),
+        *dependencies.get(source.parent.name, []), str(source), "-o", str(executable),
+    ]
+
+
+def run_python_suite(root, directory, output, run):
+    log_path = output / (directory.replace("/", "-") + ".log")
+    passed = run(directory, [sys.executable, "-B", "-m", "unittest", "discover", "-s",
+                             str(root / directory), "-v"],
+                 cwd=root, timeout=300, log_path=log_path)
+    return None if passed else (directory, log_path)
+
+
+def run_c_suite(root, source, output, clang, run):
+    executable = output / source.parent.name
+    label = f"host/{source.parent.name}"
+    log_path = Path(f"{executable}.log")
+    if not run(f"{label} build", compile_command(root, source, executable, clang),
+               cwd=root, timeout=60, log_path=log_path):
+        return f"{label} build", log_path
+    log_path = Path(f"{executable}.run.log")
+    if not run(label, [str(executable)], cwd=root, timeout=30, log_path=log_path):
+        return label, log_path
+    return None
+
+
+def run_suites(root, *, clang, run=run_command, jobs=None):
+    """Runs every suite at once, up to jobs; a failure keeps the logs."""
+    output = Path(mkdtemp(prefix="defy-host-tests-"))
+    tasks = [lambda directory=directory: run_python_suite(root, directory, output, run)
+             for directory in PYTHON_SUITES]
+    if clang is not None:
+        tasks += [lambda source=source: run_c_suite(root, source, output, clang, run)
+                  for source in sorted(root.glob("tests/host/*/main.c"))]
+    status = 1
+    try:
+        status = summarize(run_tasks(tasks, jobs or os.cpu_count() or 1))
+    finally:
+        if status == 0:
+            shutil.rmtree(output, ignore_errors=True)
+    if clang is None:
+        print("clang is required for the host C suites", file=sys.stderr)
+        return 1
+    return status
+
+
+def main():
+    root = Path(__file__).resolve().parents[1]
+    return run_suites(root, clang=shutil.which("clang"))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

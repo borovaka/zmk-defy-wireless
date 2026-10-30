@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Bluetooth profile chooser. While it is open, the halves show the profiles
+  and its keys select, clear or close; docs/lighting.md describes it. The
+  positions are the Defy's, as the Neuron's keymap numbers them.
+
+compatible: "dygma,defy-profile-chooser"
+
+include: zero_param.yaml
+
+properties:
+  select-positions:
+    type: array
+    default: [1, 2, 3, 4, 5, 8, 9, 10, 11, 12]
+    description: |
+      The keys that select profiles 1 to 10, prefer Bluetooth and close the
+      chooser: 1 to 5 on the left half, 6 to 0 on the right.
+  clear-positions:
+    type: array
+    default: [15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
+    description: |
+      The keys that clear a profile when held for three seconds, in the order
+      of select-positions: Q to T and Y to P, below the keys that select.
+  usb-positions:
+    type: array
+    default: [0, 13]
+    description: The keys that prefer USB and close the chooser, = and -.
+  close-positions:
+    type: array
+    default: [28, 45, 46]
+    description: The keys that close the chooser, Esc, C and V.

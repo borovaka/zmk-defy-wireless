@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+
+mainmenu "Defy wired peripheral tests"
+
+config ZMK_SPLIT
+    bool
+    default y
+
+config ZMK_SPLIT_ROLE_CENTRAL
+    bool
+    default n
+
+config ZMK_LOG_LEVEL
+    int
+    default 3
+
+source "Kconfig.zephyr"

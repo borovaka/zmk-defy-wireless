@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: MIT */
+
+&boot_partition {
+    reg = <0x77000 0x8000>;
+};
+
+&flash0 {
+    partitions {
+        boot_request_partition: partition@7f000 {
+            reg = <0x7f000 0x1000>;
+        };
+    };
+};
+
+&zephyr_udc0 {
+    boot_test_cdc: cdc-acm {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+    updater_test_cdc: updater-cdc-acm {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+
+/ {
+    chosen {
+        dygma,half-updater-uart = &updater_test_cdc;
+    };
+};

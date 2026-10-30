@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+
+file_format: "1"
+id: defy
+name: Dygma Defy
+type: board
+url: https://dygma.com/pages/defy
+arch: arm
+features:
+  - keys
+  - studio
+outputs:
+  - usb
+  - ble
+siblings:
+  - defy_left//zmk
+  - defy_right//zmk

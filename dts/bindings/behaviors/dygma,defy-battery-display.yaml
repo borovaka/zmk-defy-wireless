@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+description: Show each Defy half's battery level on its keys
+compatible: "dygma,defy-battery-display"
+include: zero_param.yaml

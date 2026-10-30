@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+
+import build_trees
+import neuron_image
+import package_factory
+
+
+HALVES = ("left", "right")
+HALF_VARIANTS = ("hybrid", "hybrid-awake", "hybrid-radio", "hybrid-diag")
+NEURON_VARIANTS = ("hybrid", "hybrid-log", "hybrid-battery-log")
+TARGETS = ("radio", *(f"{side}-{variant}" for side in HALVES for variant in HALF_VARIANTS),
+           *(f"neuron-{variant}" for variant in NEURON_VARIANTS))
+DEFAULT_TARGETS = ("left-hybrid", "right-hybrid", "neuron-hybrid")
+DEFAULT_FACTORY_VERSION = 1
+# A batch stages its outputs in firmware/ under a directory tempfile names with
+# this prefix and eight characters from [a-z0-9_].
+STAGING_PREFIX = ".build-"
+STAGING_NAME = re.compile(r"\.build-[a-z0-9_]{8}")
+# Where west, Zephyr and ZMK find files by name for these builds, besides the
+# config directory: boards, snippets, keymaps and overlays. A file added or
+# removed there starts the tree afresh, as does a changed Kconfig file outside
+# tests/; see build_trees.py.
+LAYOUT_DIRECTORIES = ("boards", "dts", "snippets", "apps/defy_radio", "apps/defy_loader")
+# Sources, which CMake tracks itself.
+LAYOUT_SKIPPED = ("apps/defy_radio/src", "apps/defy_loader/src")
+# The UF2 loader, which every Neuron image holds in front of ZMK; see
+# docs/uf2-loader.md. One build, in /build/loader, serves every Neuron target
+# in a batch. It is the Neuron board's plain target, beside ZMK's zmk variant.
+LOADER = "loader"
+LOADER_APP = "apps/defy_loader"
+LOADER_BOARD = "defy_neuron/nrf52833"
+# The radio image as C, which the radio's build leaves in its tree for the
+# -hybrid-radio halves.
+RADIO_SOURCE = "defy-radio.c"
+# scripts/zmk mounts the folder above this repository here.
+CONTAINER_PROJECT = Path("/work")
+# This module's name in a keymap repository's west.yml.
+MODULE = "zmk-defy-wireless"
+# The values a build embeds (docs/versions.md): key, CMake setting, name in
+# messages, and the most bytes the firmware takes.
+BUILD_VALUES = (("module", "DEFY_BUILD_MODULE_VERSION", "module version", 32),
+                ("source", "DEFY_BUILD_SOURCE", "source", 140),
+                ("commit", "DEFY_BUILD_COMMIT", "commit", 72))
+# The values go into C strings as they are: printable ASCII without " or \.
+BUILD_VALUE = re.compile(r"[\x20\x21\x23-\x5b\x5d-\x7e]*")
+# The commit's time as manifest.json lists it, empty outside git.
+COMMIT_TIME = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d)?")
+# What an image built without the values embeds: the defaults in the module's
+# CMakeLists.txt. The commit's time is not embedded; manifest.json lists it.
+UNKNOWN_BUILD = {"module": "unknown", "source": "local", "commit": "", "commit_time": ""}
+# How a launch hands the values to the container, in UNKNOWN_BUILD's order.
+VALUE_OPTIONS = ("--module-version", "--source", "--commit", "--commit-time")
+MANIFEST = "manifest.json"
+MANIFEST_SCHEMA = 1
+# The oldest defy-installer that can write these images. Raise it when the
+# images need something an older installer lacks.
+MIN_INSTALLER = "v0.1.0"
+MANIFEST_NEURON = "neuron-hybrid.hex"
+# The half images manifest.json lists: the pair the batch built, or else the
+# first pair the output holds.
+MANIFEST_HALVES = (("left-hybrid-radio.bin", "right-hybrid-radio.bin"),
+                   ("left-hybrid.bin", "right-hybrid.bin"))
+
+
+def split_target(target):
+    """left-hybrid-radio -> ("left", "hybrid-radio"); radio -> ("radio", None)."""
+    base, _, variant = target.partition("-")
+    return base, variant or None
+
+
+def check_build_info(info):
+    """Refuses values the firmware cannot take; docs/versions.md sets the limits."""
+    for key, _, name, limit in BUILD_VALUES:
+        value = info[key]
+        if not BUILD_VALUE.fullmatch(value):
+            raise ValueError(f"the {name} must be printable ASCII without \" or \\: {value!r}")
+        if len(value) > limit:
+            raise ValueError(f"the {name} is {len(value)} bytes, more than the {limit} the "
+                             f"firmware takes: {value}")
+    if not COMMIT_TIME.fullmatch(info["commit_time"]):
+        raise ValueError("the commit time must be ISO 8601 with its offset: "
+                         f"{info['commit_time']!r}")
+
+
+def build_plan(target, repo, build_root, factory_version=DEFAULT_FACTORY_VERSION, config=None,
+               modules=None, info=None):
+    """How west builds a target. info holds the values the image embeds, from
+    build_info(); without it the image gets UNKNOWN_BUILD's."""
+    if target not in TARGETS:
+        raise ValueError(f"unknown target: {target}")
+    if not 0 <= factory_version <= 0xffffffff:
+        raise ValueError("the factory version must fit an unsigned 32-bit integer")
+    if info is not None:
+        check_build_info(info)
+    base, variant = split_target(target)
+
+    directory = build_root / target
+    snippets = []
+    if base == "neuron":
+        # Studio's serial port comes first, then the half updater's.
+        if variant == "hybrid":
+            snippets.extend(("studio-rpc-usb-uart", "defy-half-updater"))
+        else:
+            logging = "defy-battery-log" if variant == "hybrid-battery-log" else "defy-ble-debug"
+            snippets.extend(("defy-half-updater", "zmk-usb-logging", logging))
+
+    if base == "radio":
+        board = "defy_rf"
+        source = str(repo / "apps/defy_radio")
+        settings = [f"-DEXTRA_ZEPHYR_MODULES={repo}"]
+        artifact = "zephyr.hex"
+    else:
+        board = f"defy_{base}//zmk"
+        source = "app"
+        config = repo / "config" if config is None else config
+        settings = [f"-DZMK_EXTRA_MODULES={repo}", f"-DZMK_CONFIG={config}"]
+        # A variant that sets one option does it here; one that sets many is a snippet.
+        if base == "neuron":
+            settings.append(f"-DCONFIG_ZMK_STUDIO={'y' if variant == 'hybrid' else 'n'}")
+        elif variant == "hybrid-radio":
+            settings.extend(("-DCONFIG_DEFY_RADIO_INSTALL=y",
+                             f"-DDEFY_RADIO_IMAGE_SOURCE={build_root / 'radio' / RADIO_SOURCE}"))
+        elif variant == "hybrid-awake":
+            settings.append("-DCONFIG_DEFY_HALF_SLEEP=n")
+        elif variant == "hybrid-diag":
+            settings.append("-DCONFIG_DEFY_FATAL_RECOVERY=n")
+        artifact = "zmk.hex"
+        if info is not None:
+            # The halves embed only the module version, so that a keymap
+            # commit leaves their images alone. Empty values still count as
+            # set, in place of the CMakeLists.txt defaults.
+            embedded = info if base == "neuron" else {**info, "source": "", "commit": ""}
+            settings.extend(f"-D{setting}={embedded[key]}" for key, setting, _, _ in BUILD_VALUES)
+
+    if modules is not None:
+        settings.append(f"-DZEPHYR_MODULES={modules}")
+    arguments = ["-s", source, "-d", str(directory), "-b", board]
+    for snippet in snippets:
+        arguments.extend(("-S", snippet))
+    arguments.extend(("--", *settings))
+    plan = {
+        "target": target,
+        "kind": "radio" if base == "radio" else "half" if base in HALVES else "neuron",
+        "side": base if base in HALVES else None,
+        "directory": directory,
+        "arguments": arguments,
+        "artifact": artifact,
+        "factory_version": factory_version,
+        "info": UNKNOWN_BUILD if info is None else info,
+    }
+    if base == "neuron":
+        plan["loader"] = loader_plan(repo, build_root, modules)
+    return plan
+
+
+def loader_plan(repo, build_root, modules=None):
+    """How west builds the UF2 loader: an app of its own, whose CMakeLists.txt
+    adds this module as a board root. It has no keymap, so every Neuron target
+    shares it."""
+    directory = build_root / LOADER
+    arguments = ["-s", str(repo / LOADER_APP), "-d", str(directory), "-b", LOADER_BOARD]
+    if modules is not None:
+        arguments.extend(("--", f"-DZEPHYR_MODULES={modules}"))
+    return {
+        "target": LOADER,
+        "kind": "loader",
+        "side": None,
+        "directory": directory,
+        "arguments": arguments,
+        "artifact": "zephyr.hex",
+    }
+
+
+def stamped_arguments(arguments):
+    """A build's arguments without the values it embeds, for its tree's stamp.
+
+    The values change with every commit. CMake writes them into one header, so
+    only the files that include it compile again, and the tree need not start
+    afresh.
+    """
+    prefixes = tuple(f"-D{setting}=" for _, setting, _, _ in BUILD_VALUES)
+    return [argument for argument in arguments if not argument.startswith(prefixes)]
+
+
+def checkout_top(directory):
+    """The top of the git checkout that holds directory, or None outside git."""
+    return next((path for path in (directory, *directory.parents) if (path / ".git").exists()),
+                None)
+
+
+def git(directory, arguments, run=subprocess.run, trust=None, check=True):
+    """Runs git in directory and returns the finished process.
+
+    trust names a checkout for git to take as safe. In the container, a
+    mounted checkout's owner is often not the container's user, and git then
+    refuses to read it.
+    """
+    options = ["-c", f"safe.directory={trust}"] if trust is not None else []
+    try:
+        result = run(["git", *options, "--no-optional-locks", "-C", str(directory), *arguments],
+                     capture_output=True, text=True)
+    except FileNotFoundError:
+        raise ValueError("scripts/build needs git to work out what a build embeds") from None
+    if check and result.returncode:
+        raise ValueError(f"git {' '.join(arguments)} failed in {directory}: "
+                         f"{result.stderr.strip()}")
+    return result
+
+
+def repository_name(url):
+    """owner/repo from a remote's URL, read the same way from SSH and HTTPS."""
+    if "://" in url:
+        path = urllib.parse.urlsplit(url).path
+    else:
+        # host:path, as in git@github.com:owner/repo.git, or a local path.
+        host, separator, rest = url.partition(":")
+        path = rest if separator and "/" not in host else url
+    path = path.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-len(".git")]
+    return "/".join([part for part in path.split("/") if part][-2:])
+
+
+def west_revision(repo, config, head, run=subprocess.run, trust=None):
+    """The revision the config directory's west.yml names for this module.
+
+    None unless west checked the module out at that revision, HEAD being its
+    refs/west/manifest-rev, or when the revision is a commit's hash.
+    """
+    fetched = git(repo, ["rev-parse", "--verify", "--quiet", "refs/west/manifest-rev^{commit}"],
+                  run, trust, check=False)
+    if fetched.returncode or fetched.stdout.strip() != head:
+        return None
+    try:
+        listed = run(["west", "list", "-f", "{revision}", MODULE], cwd=config,
+                     capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    revision = listed.stdout.strip()
+    if listed.returncode or not revision or re.fullmatch(r"[0-9a-f]{7,64}", revision):
+        return None
+    return revision
+
+
+def module_version(repo, config, run=subprocess.run, trust=None):
+    """git describe in this module's checkout; docs/versions.md.
+
+    west fetches the module without its tags. When no tag describes the
+    commit, west's revision for it stands in, with describe's -dirty.
+    """
+    if not (repo / ".git").exists():
+        return UNKNOWN_BUILD["module"]
+    # A fixed abbreviation: git's default grows with the number of objects,
+    # which differs between a full and a shallow clone, and core.abbrev
+    # changes it too.
+    described = git(repo, ["describe", "--tags", "--always", "--dirty", "--abbrev=7"],
+                    run, trust).stdout.strip()
+    head = git(repo, ["rev-parse", "HEAD"], run, trust).stdout.strip()
+    name = described[:-len("-dirty")] if described.endswith("-dirty") else described
+    if not head.startswith(name):
+        return described
+    revision = west_revision(repo, config, head, run, trust)
+    return described if revision is None else revision + described[len(name):]
+
+
+def config_values(config, run=subprocess.run, container=False):
+    """The config directory's repository, its commit and the commit's time."""
+    top = checkout_top(config)
+    if top is None:
+        return {key: UNKNOWN_BUILD[key] for key in ("source", "commit", "commit_time")}
+    trust = top if container else None
+    head = git(config, ["rev-parse", "HEAD"], run, trust).stdout.strip()
+    # Tracked files only, as git describe --dirty counts them.
+    changes = git(config, ["status", "--porcelain", "--untracked-files=no"], run, trust).stdout
+    origin = git(config, ["config", "--get", "remote.origin.url"], run, trust, check=False)
+    # git config exits with 1 for a missing key.
+    if origin.returncode not in (0, 1):
+        raise ValueError(f"git config --get remote.origin.url failed in {config}: "
+                         f"{origin.stderr.strip()}")
+    source = repository_name(origin.stdout.strip()) if origin.returncode == 0 else ""
+    # %cI writes UTC as Z in newer git and as +00:00 in older, so the time is
+    # put together from %ci, which every version writes the same way.
+    day, time, zone = git(config, ["log", "-1", "--no-show-signature", "--format=%ci", "HEAD"],
+                          run, trust).stdout.split()
+    return {"source": source or UNKNOWN_BUILD["source"],
+            "commit": head + ("-dirty" if changes.strip() else ""),
+            "commit_time": f"{day}T{time}{zone[:3]}:{zone[3:]}"}
+
+
+def build_info(repo, config, run=subprocess.run, container=False):
+    """The values a build embeds and manifest.json lists; docs/versions.md.
+
+    container: git runs in ZMK's container, where it trusts the two checkouts.
+    """
+    return {"module": module_version(repo, config, run, repo if container else None),
+            **config_values(config, run, container)}
+
+
+def west_modules(repo, zmk, run=subprocess.run):
+    """Zephyr's modules, without this one, when west lists this module too.
+
+    A keymap repository's west.yml lists this module, and Zephyr would then
+    take it from west's projects, ahead of the other modules. Naming the others
+    keeps this module where ZMK_EXTRA_MODULES puts it, after them, as in this
+    repository's own workspace, so the link order and the images stay the
+    same. None when west does not list this module.
+    """
+    listed = run(["west", "list", "-f", "{abspath}"], cwd=zmk, check=True,
+                 capture_output=True, text=True).stdout.splitlines()
+    paths = [Path(path) for path in listed if path]
+    if repo not in paths:
+        return None
+    return ";".join(str(path) for path in paths if path != repo)
+
+
+def ordered_targets(targets):
+    """The radio builds first whenever a half embeds it."""
+    targets = list(dict.fromkeys(targets))
+    if any(split_target(target)[1] == "hybrid-radio" for target in targets):
+        targets = ["radio"] + [target for target in targets if target != "radio"]
+    return targets
+
+
+def package_arguments(plan, repo, output):
+    """The packaging command for a radio or half plan, writing to output; None for a
+    Neuron, which stage_neuron() packages."""
+    artifact = plan["directory"] / "zephyr" / plan["artifact"]
+    target = plan["target"]
+    if plan["kind"] == "radio":
+        return [sys.executable, str(repo / "scripts/package_radio.py"), "--input", str(artifact),
+                "--output-bin", str(output / f"{target}.bin"),
+                "--output-seal", str(output / f"{target}.seal"),
+                "--output-source", str(output / f"{target}.c")]
+    if plan["kind"] == "half":
+        return [sys.executable, str(repo / "scripts/package_factory.py"), "--input", str(artifact),
+                "--output-bin", str(output / f"{target}.bin"),
+                "--output-uf2", str(output / f"{target}.uf2"),
+                "--version", str(plan["factory_version"]), "--side", plan["side"]]
+    return None
+
+
+def validate_build_config(plan):
+    if plan["kind"] == "radio":
+        return
+    path = plan["directory"] / "zephyr/.config"
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"{plan['target']}: cannot read build configuration {path}: {error}") from error
+    config = {}
+    for line in lines:
+        if not line.startswith("CONFIG_"):
+            continue
+        name, separator, value = line.partition("=")
+        if not separator or not value or name in config:
+            raise ValueError(f"{plan['target']}: malformed build configuration: {line}")
+        config[name] = value
+    for name, wanted in expected_config(plan).items():
+        actual = config.get(name, "n" if wanted == "n" else None)
+        try:
+            matches = int(actual, 0) == wanted if isinstance(wanted, int) else actual == wanted
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise ValueError(f"{plan['target']}: unsafe build configuration: {name} "
+                             f"must be {wanted!r}, found {actual!r}; rebuild with the target's settings")
+
+
+def expected_config(plan):
+    """The settings a build's configuration must hold, by name."""
+    if plan["kind"] == "loader":
+        return {
+            "CONFIG_BOARD": '"defy_neuron"',
+            "CONFIG_BOARD_TARGET": f'"{LOADER_BOARD}"',
+            "CONFIG_USE_DT_CODE_PARTITION": "y",
+            "CONFIG_ROM_START_OFFSET": 0,
+            "CONFIG_FLASH_BASE_ADDRESS": 0,
+            "CONFIG_FLASH_LOAD_OFFSET": neuron_image.LOADER_START,
+            "CONFIG_FLASH_LOAD_SIZE": neuron_image.ZMK_START - neuron_image.LOADER_START,
+            # As in ZMK's build: the Neuron has no 32 kHz crystal, and the
+            # low-frequency clock could hang waiting for one.
+            "CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC": "y",
+        }
+    base, variant = split_target(plan["target"])
+    half = plan["kind"] == "half"
+    expected = {
+        "CONFIG_BOARD": f'"defy_{base}"',
+        "CONFIG_USE_DT_CODE_PARTITION": "y",
+        "CONFIG_ROM_START_OFFSET": 0,
+        "CONFIG_ZMK_SPLIT": "y",
+        "CONFIG_ZMK_SPLIT_ROLE_CENTRAL": "n" if half else "y",
+        "CONFIG_DEFY_HYBRID": "y",
+        "CONFIG_DEFY_WIRED": "y",
+        "CONFIG_ZMK_BLE": "y",
+        "CONFIG_ZMK_SPLIT_BLE": "y",
+        "CONFIG_ZMK_SETTINGS_RESET_ON_START": "n",
+    }
+    if half:
+        expected.update({
+            "CONFIG_FLASH_BASE_ADDRESS": package_factory.FLASH_BASE,
+            "CONFIG_FLASH_LOAD_OFFSET": package_factory.VECTOR_OFFSET,
+            "CONFIG_FLASH_LOAD_SIZE": package_factory.STORAGE_OFFSET - package_factory.VECTOR_OFFSET,
+            "CONFIG_DEFY_RP2040_FACTORY_HANDOFF": "y",
+            "CONFIG_INIT_ARCH_HW_AT_BOOT": "y",
+            "CONFIG_RP2_REQUIRES_SECOND_STAGE_BOOT": "n",
+            "CONFIG_BUILD_OUTPUT_UF2": "n",
+            "CONFIG_ZMK_DBL_TAP_BOOTLOADER": "n",
+            "CONFIG_DEFY_RADIO_INSTALL": "y" if variant == "hybrid-radio" else "n",
+            "CONFIG_DEFY_BT_HCI_SPI": "y",
+            "CONFIG_DEFY_HALF_SLEEP": "n" if variant == "hybrid-awake" else "y",
+            "CONFIG_DEFY_FATAL_RECOVERY": "n" if variant == "hybrid-diag" else "y",
+        })
+    else:
+        expected.update({
+            "CONFIG_FLASH_BASE_ADDRESS": 0,
+            "CONFIG_FLASH_LOAD_OFFSET": neuron_image.ZMK_START,
+            "CONFIG_FLASH_LOAD_SIZE": neuron_image.SETTINGS_START - neuron_image.ZMK_START,
+            # ZMK alone, for the UF2 loader's drive.
+            "CONFIG_BUILD_OUTPUT_UF2": "y",
+            # &defy_drive asks the UF2 loader for its drive through ZMK's boot
+            # mode, which writes this value into GPREGRET.
+            "CONFIG_RETENTION_BOOT_MODE": "y",
+            "CONFIG_ZMK_BOOTMODE_BOOTLOADER_MAGIC_VALUE": neuron_image.DRIVE_MAGIC,
+            # Without these the loader's start counter would show the drive
+            # after three healthy starts, and a ZMK fault would halt the Neuron.
+            "CONFIG_DEFY_LOADER_CONFIRM": "y",
+            "CONFIG_DEFY_NEURON_FATAL_RESET": "y",
+            # Both turn themselves off when an option they depend on is missing.
+            "CONFIG_DEFY_HALF_UPDATER": "y",
+            "CONFIG_DEFY_NEURON_BOOTLOADER": "y",
+        })
+    return expected
+
+
+def hex_text(path):
+    try:
+        return path.read_bytes().decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError(f"{path.name} must be an Intel HEX file") from None
+
+
+def stage_loader(plan):
+    """The loader's data, checked, and a report of its size."""
+    try:
+        memory = neuron_image.read(hex_text(plan["directory"] / "zephyr" / plan["artifact"]),
+                                   "UF2 loader")
+        end = neuron_image.check_part(memory, neuron_image.LOADER)
+    except ValueError as error:
+        raise ValueError(f"{plan['target']}: {error}") from None
+    boundary = neuron_image.ZMK_START
+    return memory, (f"{plan['target']}: {end - neuron_image.LOADER_START} bytes, "
+                    f"{boundary - end} bytes free before ZMK at 0x{boundary:x}")
+
+
+def stage_neuron(plan, loader, directory):
+    """Writes <target>.hex, the loader and ZMK merged, and <target>.uf2, ZMK alone,
+    to directory and checks both. loader is stage_loader()'s data. Returns the
+    report line."""
+    target = plan["target"]
+    build = plan["directory"] / "zephyr"
+    image = directory / f"{target}.hex"
+    uf2 = directory / f"{target}.uf2"
+    try:
+        zmk = neuron_image.read(hex_text(build / plan["artifact"]), "ZMK")
+        end = neuron_image.check_part(zmk, neuron_image.ZMK)
+        merged = neuron_image.merge(loader, zmk)
+        image.write_bytes(package_factory.to_ihex(merged).encode("ascii"))
+        if neuron_image.read(hex_text(image), "Neuron") != merged:
+            raise ValueError(f"{image.name} does not read back as the loader and ZMK")
+        if not (build / "zmk.uf2").is_file():
+            raise ValueError("the build did not produce zmk.uf2")
+        shutil.copyfile(build / "zmk.uf2", uf2)
+        neuron_image.check_uf2(uf2.read_bytes(), zmk)
+    except ValueError as error:
+        raise ValueError(f"{target}: {error}") from None
+    boundary = neuron_image.SETTINGS_START
+    return f"{image.name}: {boundary - end} bytes free before settings at 0x{boundary:05x}"
+
+
+def image_entry(name, data):
+    return {"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def half_entry(name, path, side):
+    """A half image's entry, with its seal's program CRC32 and version."""
+    data = path.read_bytes()
+    try:
+        package = package_factory.verify_package(data)
+    except ValueError as error:
+        raise ValueError(f"{name}: {error}") from None
+    if package["side"] != side:
+        raise ValueError(f"{name}: not a {side} half's package")
+    return {**image_entry(name, data), "program_crc32": package["program_crc32"],
+            "seal_version": package["version"]}
+
+
+def neuron_values(plans, output, neuron):
+    """What the Neuron image embeds: this batch's values when it built the
+    image, otherwise those of the manifest that already lists it, or None."""
+    for plan in plans:
+        if plan["target"] == "neuron-hybrid":
+            return plan["info"]
+    try:
+        previous = json.loads((output / MANIFEST).read_text())
+        if (previous["schema"] != MANIFEST_SCHEMA or previous["files"]["neuron"]["sha256"] !=
+                hashlib.sha256(neuron.read_bytes()).hexdigest()):
+            return None
+        values = {key: previous[key] for key in UNKNOWN_BUILD}
+        check_build_info(values)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return values
+
+
+def manifest(plans, output, published):
+    """manifest.json's text for the output directory once this batch is
+    published; docs/versions.md. None when the directory lacks the Neuron
+    image or a pair of half images, or when what the Neuron image embeds is
+    not known.
+
+    published maps the names this batch publishes to their staged files.
+    """
+    def path(name):
+        return published.get(name, output / name)
+
+    neuron = path(MANIFEST_NEURON)
+    pairs = [pair for pair in MANIFEST_HALVES if all(path(name).is_file() for name in pair)]
+    halves = next((pair for pair in pairs if all(name in published for name in pair)),
+                  pairs[0] if pairs else None)
+    if not neuron.is_file() or halves is None:
+        return None
+    values = neuron_values(plans, output, neuron)
+    if values is None:
+        print(f"No {MANIFEST}: {MANIFEST_NEURON} comes from an earlier build that no manifest "
+              "lists; build neuron-hybrid to write one", flush=True)
+        return None
+    document = {
+        "schema": MANIFEST_SCHEMA,
+        **{key: values[key] for key in UNKNOWN_BUILD},
+        "min_installer": MIN_INSTALLER,
+        "files": {
+            "neuron": image_entry(MANIFEST_NEURON, neuron.read_bytes()),
+            **{side: half_entry(name, path(name), side) for side, name in zip(HALVES, halves)},
+        },
+    }
+    return json.dumps(document, indent=2) + "\n"
+
+
+def staged_outputs(plan, directory):
+    extensions = {"radio": ("bin", "seal", "c"), "half": ("bin", "uf2"), "neuron": ("hex", "uf2")}
+    return [directory / f"{plan['target']}.{extension}"
+            for extension in extensions[plan["kind"]]]
+
+
+def remove_stale_staging(output, lock):
+    """Removes staging directories left by batches that were killed.
+
+    Each batch holds a shared lock on firmware/ while its staging directory
+    exists, so the exclusive lock is only free when no other batch is running.
+    Without it, or without file locks at all, nothing is removed.
+    """
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return
+    for path in sorted(output.iterdir()):
+        if STAGING_NAME.fullmatch(path.name) and path.is_dir() and not path.is_symlink():
+            print(f"Removing {path.name}, left by an interrupted build", flush=True)
+            try:
+                shutil.rmtree(path)
+            except OSError as error:
+                print(f"Could not remove {path.name}: {error}", file=sys.stderr, flush=True)
+
+
+def terminate(signum, frame):
+    """Turns SIGTERM into an exit that removes the staging directory.
+
+    In the container this script is PID 1, which ignores SIGTERM unless it has
+    a handler, so docker stop would otherwise end in SIGKILL.
+    """
+    raise SystemExit(128 + signum)
+
+
+def run_builds(plans, repo, run=subprocess.run, output=None, config=None, zmk=None):
+    output = repo / "firmware" if output is None else output
+    config = repo / "config" if config is None else config
+    workspace = repo.parent / "zmk-workspace/zmk" if zmk is None else zmk
+    output.mkdir(exist_ok=True)
+    lock = os.open(output, os.O_RDONLY)
+    try:
+        remove_stale_staging(output, lock)
+        # Held until this batch's staging directory is gone, so that other
+        # batches leave it alone.
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+        except OSError:
+            pass
+        build_batch(plans, repo, run, output, workspace, config)
+    finally:
+        os.close(lock)
+
+
+def west_build(plan, run, workspace, layout, kconfig):
+    """Builds a plan in its tree, checks the configuration and stamps the tree."""
+    print(f"Building {plan['target']}", flush=True)
+    directory = plan["directory"]
+    key = build_trees.key(stamped_arguments(plan["arguments"]), layout, kconfig)
+    run(["west", "build", "-p", build_trees.pristine(directory, key), *plan["arguments"]],
+        cwd=workspace, check=True)
+    validate_build_config(plan)
+    build_trees.record(directory, key)
+
+
+def build_batch(plans, repo, run, output, workspace, config):
+    with tempfile.TemporaryDirectory(prefix=STAGING_PREFIX, dir=output) as temporary:
+        staged = Path(temporary)
+        publications = []
+        reports = []
+        layout = sorted(build_trees.layout(repo, LAYOUT_DIRECTORIES, skip=LAYOUT_SKIPPED) +
+                        build_trees.layout(config.parent, [config.name]))
+        kconfig = build_trees.kconfig(repo, ["."], skip=["tests"])
+        # The loader's data, from its build before the batch's first Neuron.
+        loader = None
+        for plan in plans:
+            if plan["kind"] == "neuron" and loader is None:
+                west_build(plan["loader"], run, workspace, layout, kconfig)
+                loader, report = stage_loader(plan["loader"])
+                reports.append(report)
+            west_build(plan, run, workspace, layout, kconfig)
+            package = package_arguments(plan, repo, staged)
+            if package is not None:
+                run(package, check=True)
+            else:
+                reports.append(stage_neuron(plan, loader, staged))
+            artifacts = staged_outputs(plan, staged)
+            for artifact in artifacts:
+                if not artifact.is_file():
+                    raise ValueError(f"build did not produce {artifact.name}")
+            if plan["kind"] == "radio":
+                # The -hybrid-radio halves compile this copy (DEFY_RADIO_IMAGE_SOURCE).
+                # Replace it only when it changes, so that they do not recompile.
+                source = staged / f"{plan['target']}.c"
+                dependency = plan["directory"] / RADIO_SOURCE
+                if not dependency.exists() or dependency.read_bytes() != source.read_bytes():
+                    shutil.copyfile(source, dependency)
+            publications.extend(artifacts)
+        # The manifest goes last, after the images it lists.
+        text = manifest(plans, output, {path.name: path for path in publications})
+        if text is not None:
+            listing = staged / MANIFEST
+            listing.write_bytes(text.encode("ascii"))
+            publications.append(listing)
+            files = json.loads(text)["files"]
+            reports.append(f"{MANIFEST}: {', '.join(entry['name'] for entry in files.values())}")
+        # A stop request waits until the whole batch is published.
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+        try:
+            for artifact in publications:
+                artifact.replace(output / artifact.name)
+            if text is None:
+                (output / MANIFEST).unlink(missing_ok=True)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        for report in reports:
+            print(report, flush=True)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    parser = argparse.ArgumentParser(
+        description="Build Defy firmware in ZMK's Docker container.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Targets:
+  left-hybrid, right-hybrid
+                The normal halves: cable or Bluetooth link, sleep after five
+                idle minutes. They keep the radio firmware already installed.
+  neuron-hybrid The normal Neuron: routes each half, sends keys over USB or
+                Bluetooth, runs ZMK Studio and the half updater.
+  radio         The Bluetooth controller: radio.bin, its seal and radio.c.
+  left-hybrid-radio, right-hybrid-radio
+                The normal halves plus the radio image they install. A batch
+                with these builds radio first.
+  left-hybrid-awake, right-hybrid-awake
+                The normal halves with sleep off.
+  left-hybrid-diag, right-hybrid-diag
+                The normal halves, except that a crash stays on the key LEDs
+                instead of restarting the half.
+  neuron-hybrid-log
+                The Neuron with a USB serial log in place of Studio.
+  neuron-hybrid-battery-log
+                The Neuron with a battery log in place of Studio.
+  all           Every target above.
+
+Outputs in firmware/, or --output, published only when every target in the
+batch succeeds:
+  Halves: <target>.bin for the installer, and .uf2
+  Neuron: <target>.hex for the installer, the UF2 loader and ZMK together, and
+          <target>.uf2, ZMK alone, for the loader's drive
+  Radio:  radio.bin, radio.seal and radio.c
+  manifest.json, when the directory holds neuron-hybrid.hex and a pair of
+  half images: what the Neuron embeds, and each image's size and SHA-256.
+  See docs/versions.md.
+Build trees: zmk-defy-build Docker volume, /build/<target>. A batch with a
+Neuron target builds the UF2 loader first, once, in /build/loader. The
+-hybrid-radio halves embed /build/radio/defy-radio.c, written by the radio
+build in the same batch.
+""",
+    )
+    parser.add_argument("targets", nargs="*",
+                        help="one or more targets, or all; default: left-hybrid, right-hybrid, neuron-hybrid")
+    parser.add_argument(
+        "--factory-version", type=lambda value: int(value, 0), default=DEFAULT_FACTORY_VERSION,
+        help="unsigned 32-bit version the halves report to the stock updater (default 1)",
+    )
+    parser.add_argument("--config", type=Path,
+                        help="ZMK config directory with the keymap and .conf files (default: config/)")
+    parser.add_argument("--output", type=Path, help="where the images go (default: firmware/)")
+    parser.add_argument("--zmk", type=Path,
+                        help="ZMK's checkout in a west workspace (default: ../zmk-workspace/zmk)")
+    parser.add_argument("--container", action="store_true", help=argparse.SUPPRESS)
+    # The values the build embeds, which a launch works out on the host, where
+    # git runs as the checkouts' owner, and hands to the container. A snapshot
+    # comparison gives fixed ones, so that two commits' images differ only
+    # where their code does.
+    for option in VALUE_OPTIONS:
+        parser.add_argument(option, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    unknown = set(args.targets) - {*TARGETS, "all"}
+    if unknown:
+        parser.error(f"unknown target: {', '.join(sorted(unknown))}")
+    targets = ordered_targets(TARGETS if "all" in args.targets else args.targets or DEFAULT_TARGETS)
+    repo = Path(__file__).resolve().parent.parent
+    config = (args.config or repo / "config").resolve()
+    output = (args.output or repo / "firmware").resolve()
+    zmk = (args.zmk or repo.parent / "zmk-workspace/zmk").resolve()
+
+    def plans_for(info, modules=None):
+        try:
+            return [build_plan(target, repo, Path("/build"), args.factory_version, config, modules,
+                               info) for target in targets]
+        except ValueError as error:
+            parser.error(str(error))
+
+    # The factory version is checked before git runs.
+    plans_for(None)
+    given = [getattr(args, option[2:].replace("-", "_")) for option in VALUE_OPTIONS]
+    if all(value is not None for value in given):
+        info = dict(zip(UNKNOWN_BUILD, given))
+    elif any(value is not None for value in given):
+        parser.error(f"{', '.join(VALUE_OPTIONS)} go together")
+    else:
+        info = build_info(repo, config, container=args.container)
+    plans = plans_for(info)
+    if args.container:
+        signal.signal(signal.SIGTERM, terminate)
+        print(f"Module {info['module']}, source {info['source']}, "
+              f"commit {info['commit'] or 'none'}", flush=True)
+        modules = west_modules(repo, zmk)
+        if modules is not None:
+            plans = plans_for(info, modules)
+        run_builds(plans, repo, output=output, config=config, zmk=zmk)
+    else:
+        project = repo.parent
+        try:
+            paths = ["--config", str(container_path(config, project)),
+                     "--output", str(container_path(output, project)),
+                     "--zmk", str(container_path(zmk, project))]
+        except ValueError as error:
+            parser.error(str(error))
+        # As --option=value, so that a value starting with - stays a value.
+        values = [f"{option}={info[key]}" for option, key in zip(VALUE_OPTIONS, UNKNOWN_BUILD)]
+        return subprocess.run([str(repo / "scripts/zmk"), "python3",
+                               str(container_path(repo / "scripts/build", project)),
+                               "--container", *args.targets,
+                               "--factory-version", str(args.factory_version), *paths,
+                               *values]).returncode
+
+
+def container_path(path, project):
+    """Where the container sees a path under the folder above this repository."""
+    try:
+        return CONTAINER_PROJECT / path.relative_to(project)
+    except ValueError:
+        raise ValueError(f"{path} must be inside {project}, which the container sees as "
+                         f"{CONTAINER_PROJECT}") from None
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

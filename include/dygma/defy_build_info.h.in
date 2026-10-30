@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: MIT */
+
+#ifndef DYGMA_DEFY_BUILD_INFO_H
+#define DYGMA_DEFY_BUILD_INFO_H
+
+/*
+ * What this image was built from, written by the module's CMakeLists.txt from
+ * the values scripts/build passes. docs/versions.md describes them. The halves
+ * get an empty source and commit.
+ */
+#define DEFY_BUILD_MODULE_VERSION "@DEFY_BUILD_MODULE_VERSION@"
+#define DEFY_BUILD_SOURCE "@DEFY_BUILD_SOURCE@"
+#define DEFY_BUILD_COMMIT "@DEFY_BUILD_COMMIT@"
+
+#endif

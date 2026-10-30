@@ -1,0 +1,195 @@
+/*
+ * Devicetree shared by both halves' RP2040 main boards. The half's own USB
+ * port is untested.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <raspberrypi/rpi_pico/rp2040.dtsi>
+#include <arm/raspberrypi/rp2040-boot-mode-retention.dtsi>
+#include <freq.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/led/led.h>
+
+#include "defy-key-leds.h"
+#include "defy-pinctrl.dtsi"
+#include "defy-layouts.dtsi"
+
+#define DEFY_UNDERGLOW_LED_COUNT 53
+
+/ {
+    chosen {
+        zephyr,sram = &sram0;
+        zephyr,flash = &flash0;
+        zephyr,flash-controller = &ssi;
+        zephyr,code-partition = &code_partition;
+        zmk,kscan = &kscan0;
+        zmk,physical-layout = &defy_layout;
+        zephyr,bt-hci = &bt_hci_spi;
+        zephyr,entropy = &bt_hci_entropy;
+    };
+
+    /* Random numbers from the nRF52820's controller; the RP2040 has no TRNG. */
+    bt_hci_entropy: bt-hci-entropy {
+        compatible = "zephyr,bt-hci-entropy";
+    };
+
+    /*
+     * Lines 0-4 on GPIO 8-12 are driven low one at a time. Inputs on GPIO 0-7
+     * have pull-ups and read low when pressed. The halves list the inputs in
+     * different orders, so col-gpios is set in each half's .dts.
+     */
+    kscan0: kscan {
+        compatible = "zmk,kscan-gpio-matrix";
+        wakeup-source;
+        diode-direction = "row2col";
+        row-gpios
+            = <&gpio0 8 GPIO_ACTIVE_LOW>
+            , <&gpio0 9 GPIO_ACTIVE_LOW>
+            , <&gpio0 10 GPIO_ACTIVE_LOW>
+            , <&gpio0 11 GPIO_ACTIVE_LOW>
+            , <&gpio0 12 GPIO_ACTIVE_LOW>
+            ;
+    };
+
+    /*
+     * Per-key LEDs, then underglow, as one strip. The driver also switches
+     * UG_EN and inverts the underglow data line.
+     */
+    defy_leds: defy_leds {
+        compatible = "dygma,defy-leds";
+        chain-length = <(DEFY_KEY_LED_COUNT + DEFY_UNDERGLOW_LED_COUNT)>;
+        key-leds = <&key_leds>;
+        underglow = <&underglow>;
+        underglow-power-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+        underglow-inverted;
+    };
+};
+
+&flash0 {
+    /* ZB25VQ16, 2 MiB */
+    reg = <0x10000000 DT_SIZE_M(2)>;
+
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        factory_bootloader: partition@0 {
+            reg = <0x0 0x5000>;
+            read-only;
+        };
+
+        factory_seal: partition@5000 {
+            reg = <0x5000 0x1100>;
+            read-only;
+        };
+
+        code_partition: partition@6100 {
+            reg = <0x6100 (0x1c0000 - 0x6100)>;
+            read-only;
+        };
+
+        storage_partition: partition@1c0000 {
+            reg = <0x1c0000 DT_SIZE_K(256)>;
+        };
+    };
+};
+
+&gpio0 {
+    status = "okay";
+
+    /*
+     * IS31FL3743B SDB. Low keeps the per-key LED driver in hardware shutdown.
+     * The hog covers builds without the LED strip driver; with it, the driver
+     * takes the pin over and keeps it low until an LED is lit.
+     */
+    led-driver-sdb {
+        gpio-hog;
+        gpios = <15 GPIO_ACTIVE_HIGH>;
+        output-low;
+    };
+
+    /*
+     * UG_EN. Low keeps the underglow chain unpowered. As with SDB, defy_leds
+     * takes the pin over when built.
+     */
+    underglow-power {
+        gpio-hog;
+        gpios = <14 GPIO_ACTIVE_HIGH>;
+        output-low;
+    };
+};
+
+&spi0 {
+    status = "okay";
+    pinctrl-0 = <&spi0_default>;
+    pinctrl-names = "default";
+
+    /*
+     * Chip selects: 0 the IS31FL3743B (GPIO19), 1 the nRF52820 (GPIO18), 2 the
+     * cable to the Neuron (GPIO21). The SPI driver drives all three inactive
+     * when it initialises.
+     */
+    cs-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>,
+               <&gpio0 18 GPIO_ACTIVE_LOW>,
+               <&gpio0 21 GPIO_ACTIVE_LOW>;
+
+    /* Per-key LEDs: four channels each, R, G, B, W in CS order. */
+    key_leds: is31fl3743b@0 {
+        compatible = "issi,is31fl3743b";
+        reg = <0>;
+        spi-max-frequency = <DT_FREQ_M(2)>;
+        sdb-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+        chain-length = <DEFY_KEY_LED_COUNT>;
+        color-mapping = <LED_COLOR_ID_RED LED_COLOR_ID_GREEN LED_COLOR_ID_BLUE LED_COLOR_ID_WHITE>;
+        pwm-registers = DEFY_KEY_LED_PWM_REGISTERS;
+    };
+
+    /*
+     * The nRF52820 on the RF board, running apps/defy_radio's HCI controller.
+     * Data ready comes in on GPIO24. There is no reset line; the driver
+     * restarts the radio over SPI.
+     */
+    bt_hci_spi: bt-hci@1 {
+        compatible = "dygma,defy-bt-hci-spi";
+        reg = <1>;
+        spi-max-frequency = <DT_FREQ_M(2)>;
+        irq-gpios = <&gpio0 24 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+    };
+
+    /* The cable to the Neuron, the SPI slave. Each half's .dts sets half-id. */
+    defy_wired: wired@2 {
+        compatible = "dygma,defy-wired-peripheral";
+        reg = <2>;
+        spi-max-frequency = <DT_FREQ_M(1)>;
+    };
+};
+
+/*
+ * Underglow: SK6812-type RGBW LEDs on GPIO13 from PIO0, with the stock
+ * firmware's timing: 1.25 us per bit in 125 ns cycles, high for 250 ns for a 0
+ * and 875 ns for a 1. Wire order G, R, B, W.
+ */
+&pio0 {
+    status = "okay";
+
+    pio-ws2812 {
+        compatible = "dygma,ws2812-rpi-pico-pio";
+        pinctrl-0 = <&underglow_default>;
+        pinctrl-names = "default";
+        bit-waveform = <2>, <5>, <3>;
+
+        underglow: underglow {
+            gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            chain-length = <DEFY_UNDERGLOW_LED_COUNT>;
+            color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE LED_COLOR_ID_WHITE>;
+            reset-delay = <280>;
+            frequency = <800000>;
+        };
+    };
+};
+
+zephyr_udc0: &usbd {
+    status = "okay";
+};

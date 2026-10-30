@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  The Neuron's two cable sockets to the Defy halves. Each cable carries an SPI
+  link, on which the Neuron is the slave, and the half's RP2040 RUN line. The
+  I2C bus to the halves' bootloaders runs through both.
+
+compatible: "dygma,defy-neuron-cables"
+
+properties:
+  spi-ports:
+    type: phandles
+    required: true
+    description: The SPI slave on socket 1, then the one on socket 2.
+
+  run-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      The left half's RUN line, then the right half's, active high and without
+      pull. A cabled half's own pull-up reads high, which shows that its cable
+      is in. Driven low, a line holds that half in reset.
+
+  i2c-bus:
+    type: phandle
+    required: true
+    description: The I2C bus to the halves' bootloaders.

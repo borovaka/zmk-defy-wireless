@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Builds and runs the keymap, driver and Studio tests on native_sim, in ZMK's container."""
+
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import build_trees
+from test_runner import report, run_command, run_tasks, summarize
+
+
+KINDS = ("keymap", "drivers", "studio")
+BUILD_TIMEOUT = 600
+RUN_TIMEOUT = 120
+MAX_JOBS = 8
+# A driver suite's switches, each declared in its CMakeLists.txt as
+#   option(DEFY_TEST_<NAME> "<what it changes>" OFF)
+# The suite builds once with all of them off, as <suite>, and once with each on
+# alone, as <suite>-<name>.
+TEST_OPTION = re.compile(r'^\s*option\(\s*(DEFY_TEST_\w+)\s+"[^"]*"\s+(\w+)\s*\)', re.MULTILINE)
+# ZMK's app/run-test.sh for one keymap case, built in $1 from the case in $2:
+# keep what the log lines hold after "> ", pick the key events with the case's
+# events.patterns and compare them with its snapshot, ignoring white space at
+# line ends. ZMK_TESTS_AUTO_ACCEPT takes the new events as the snapshot instead
+# of failing. Unlike run-test.sh, a simulator that exits with an error fails
+# the case, whatever it printed.
+KEYMAP_CHECK = """
+{ "$1/zephyr/zmk.exe"; echo $? > "$1/zmk_status"; } | sed -e 's/.*> //' |
+    tee "$1/keycode_events_full.log" | sed -n -f "$2/events.patterns" > "$1/keycode_events.log"
+status=$(cat "$1/zmk_status")
+if [ "$status" != 0 ]; then
+    echo "zmk.exe exited with status $status"
+    exit 1
+fi
+diff -auZ "$2/keycode_events.snapshot" "$1/keycode_events.log" && exit 0
+if [ -n "$ZMK_TESTS_AUTO_ACCEPT" ]; then
+    echo "Taking the new events as the snapshot"
+    cp "$1/keycode_events.log" "$2/keycode_events.snapshot"
+else
+    exit 1
+fi
+"""
+
+
+def default_jobs():
+    return min(MAX_JOBS, max(1, (os.cpu_count() or 1) // 2))
+
+
+def keymap_plans(root, build_root, app):
+    """ZMK's keymap test cases: each directory of tests/keymap with a native_sim.keymap."""
+    plans = []
+    for keymap in sorted((root / "tests/keymap").glob("*/native_sim.keymap")):
+        case = keymap.parent
+        directory = build_root / "keymap" / case.name
+        arguments = ["-DCONFIG_ASSERT=y", f"-DZMK_CONFIG={case}", f"-DZMK_EXTRA_MODULES={root}"]
+        plans.append({
+            "label": f"keymap/{case.name}",
+            "board": "native_sim//zmk_test_mock",
+            "source": app,
+            "directory": directory,
+            "arguments": arguments,
+            "layout": (case.relative_to(root), "dts"),
+            "run": ["sh", "-c", KEYMAP_CHECK, "sh", str(directory), str(case)],
+        })
+    return plans
+
+
+def driver_plans(root, build_root):
+    """Every directory of tests/drivers with a CMakeLists.txt, once per switch it declares."""
+    plans = []
+    for source in sorted((root / "tests/drivers").iterdir()):
+        cmake = source / "CMakeLists.txt"
+        if not cmake.is_file():
+            continue
+        options = TEST_OPTION.findall(cmake.read_text())
+        for name, default in options:
+            if default != "OFF":
+                raise ValueError(f"{cmake}: {name} must default to OFF")
+        switches = [name for name, _ in options]
+        files = source.relative_to(root)
+        for enabled in (None, *switches):
+            variant = source.name
+            if enabled:
+                variant += "-" + enabled[len("DEFY_TEST_"):].lower().replace("_", "-")
+            directory = build_root / "drivers" / variant
+            plans.append({
+                "label": f"drivers/{variant}",
+                "suite": source.name,
+                "variant": variant,
+                "board": "native_sim",
+                "source": source,
+                "directory": directory,
+                "arguments": [f"-DEXTRA_ZEPHYR_MODULES={root}",
+                              *(f"-D{name}={'ON' if name == enabled else 'OFF'}" for name in switches)],
+                "layout": (files, "tests/drivers/common", "dts"),
+                "run": [str(directory / "zephyr/zephyr.exe")],
+            })
+    return plans
+
+
+def studio_plan(root, build_root, workspace):
+    """A Studio client against the keymap in tests/studio."""
+    directory = build_root / "studio"
+    return {
+        "label": "studio",
+        "board": "native_sim//zmk_test_mock",
+        "source": workspace / "app",
+        "directory": directory,
+        "arguments": ["-DCONFIG_ASSERT=y", f"-DZMK_CONFIG={root / 'tests/studio'}",
+                      f"-DZMK_EXTRA_MODULES={root};{root / 'tests/studio/transport'}"],
+        "layout": ("tests/studio", "dts"),
+        "run": [sys.executable, str(root / "tests/studio/rpc_test.py"),
+                str(directory / "zephyr/zmk.exe"),
+                str(workspace / "modules/msgs/zmk-studio-messages/proto/zmk"),
+                str(root / "boards/dygma/defy/defy-layouts.dtsi")],
+    }
+
+
+def run_plan(root, plan, workspace, run, module_kconfig, build_jobs=None):
+    """Builds and runs one plan; returns the failed step's label and log, or None.
+
+    The plan's layout directories hold the files west and Zephyr find by name for
+    it: its own outside src/, such as app.overlay and boards/, shared bindings and
+    the module's bindings. module_kconfig is the digest of the module's Kconfig
+    files.
+    """
+    directory = plan["directory"]
+    own = Path(plan["layout"][0])
+    target = ["-b", plan["board"], "-s", str(plan["source"]), "-d", str(directory)]
+    # The suite's own Kconfig files count too, as a suite can define symbols.
+    kconfig = module_kconfig + "+" + build_trees.kconfig(root, [own])
+    key = build_trees.key([*target, *plan["arguments"]],
+                          build_trees.layout(root, plan["layout"], skip=(own / "src",)), kconfig)
+    pristine = build_trees.pristine(directory, key)
+    build = ["west", "build", "-p", pristine, *target]
+    if build_jobs:
+        build.append(f"-o=-j{build_jobs}")
+    # CMake arguments make west configure again, which takes most of a build
+    # that has nothing else to do. The tree's cache already holds them when the
+    # stamp matches, as only a successful build writes the stamp.
+    if pristine == "always":
+        (directory / build_trees.STAMP).unlink(missing_ok=True)
+        build.extend(("--", *plan["arguments"]))
+    log_path = Path(f"{directory}.log")
+    label = f"{plan['label']} build"
+    if not run(label, build, cwd=workspace, timeout=BUILD_TIMEOUT, log_path=log_path):
+        return label, log_path
+    build_trees.record(directory, key)
+    log_path = Path(f"{directory}.run.log")
+    if not run(plan["label"], plan["run"], cwd=workspace, timeout=RUN_TIMEOUT, log_path=log_path):
+        return plan["label"], log_path
+    return None
+
+
+def run_suites(root, kinds, *, build_root=Path("/build/tests"), drivers=None, jobs=1,
+               run=run_command):
+    workspace = root.parent / "zmk-workspace/zmk"
+    plans = []
+    # The ZMK builds take longest, so they start first.
+    if "studio" in kinds:
+        plans.append(studio_plan(root, build_root, workspace))
+    if "keymap" in kinds:
+        plans.extend(keymap_plans(root, build_root, workspace / "app"))
+    if "drivers" in kinds:
+        suites = driver_plans(root, build_root)
+        if drivers:
+            unknown = set(drivers) - {plan[key] for plan in suites for key in ("suite", "variant")}
+            if unknown:
+                raise ValueError(f"unknown driver suites: {', '.join(sorted(unknown))}")
+            suites = [plan for plan in suites
+                      if plan["suite"] in drivers or plan["variant"] in drivers]
+        plans.extend(suites)
+    jobs = min(jobs, len(plans))
+    module_kconfig = build_trees.kconfig(root, ["."], skip=["tests"])
+    build_jobs = None
+    if jobs > 1:
+        # Each plan has its own build tree and logs. Split the CPUs between the
+        # builds so that their ninjas do not oversubscribe them.
+        build_jobs = max(1, (os.cpu_count() or 1) // jobs)
+        report(f"Running {len(plans)} plans, {jobs} at a time, ninja -j{build_jobs}")
+    results = run_tasks([lambda plan=plan: run_plan(root, plan, workspace, run, module_kconfig,
+                                                    build_jobs)
+                         for plan in plans], jobs)
+    return summarize(results)
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1: {value}")
+    return number
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("kinds", nargs="*", metavar="{" + ",".join(KINDS) + "}",
+                        help="the tests to run (default: all)")
+    parser.add_argument("--driver", action="append",
+                        help="run only this driver suite, or one of its variants such as "
+                             "defy_hybrid_peripheral-graceful-sleep")
+    parser.add_argument("--jobs", type=positive_int,
+                        help=f"builds to run at once (default: half the CPUs, at most {MAX_JOBS})")
+    parser.add_argument("--container", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    unknown = set(args.kinds) - set(KINDS)
+    if unknown:
+        parser.error("unknown test kinds: " + ", ".join(sorted(unknown)))
+    kinds = args.kinds or (["drivers"] if args.driver else list(KINDS))
+    if args.driver and "drivers" not in kinds:
+        parser.error("--driver requires drivers tests")
+    root = Path(__file__).resolve().parents[1]
+    try:
+        if args.container:
+            return run_suites(root, kinds, drivers=args.driver, jobs=args.jobs or default_jobs())
+        command = [
+            str(root / "scripts/zmk"), "env",
+            f"ZMK_TESTS_AUTO_ACCEPT={os.environ.get('ZMK_TESTS_AUTO_ACCEPT', '')}",
+            "python3", f"/work/{root.name}/scripts/test", "--container", *argv,
+        ]
+        # native_sim builds 32-bit x86 programs, so the tests run in the amd64 image,
+        # emulated on arm64 hosts.
+        return subprocess.call(command, env=dict(os.environ, ZMK_PLATFORM="linux/amd64"))
+    except (OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,24 @@
+/*
+ * The loader runs from loader_partition at 0x1000, where n2_bootloader starts
+ * it; code_partition is ZMK's. loader_serial takes the installer's 1200-baud
+ * request for n2_bootloader.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    chosen {
+        zephyr,code-partition = &loader_partition;
+    };
+};
+
+/* No driver for GPREGRET: start.c and main.c own it. */
+&gpregret1 {
+    status = "disabled";
+};
+
+&zephyr_udc0 {
+    loader_serial: loader_serial {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

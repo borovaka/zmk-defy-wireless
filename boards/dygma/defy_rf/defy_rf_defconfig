@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+
+CONFIG_ARM_MPU=y
+CONFIG_HW_STACK_PROTECTION=y
+CONFIG_GPIO=y
+
+# Started at 0x1C000 by S113 after rf_bootloader, which leave the core and
+# SPIS running (apps/defy_radio/src/startup.c).
+CONFIG_USE_DT_CODE_PARTITION=y
+CONFIG_INIT_ARCH_HW_AT_BOOT=y
+CONFIG_BUILD_OUTPUT_HEX=y

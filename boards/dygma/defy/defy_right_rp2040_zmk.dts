@@ -1,0 +1,34 @@
+/*
+ * SPDX-License-Identifier: MIT
+ */
+
+/dts-v1/;
+
+#include "defy.dtsi"
+
+/ {
+    model = "Dygma Defy, right half";
+    compatible = "dygma,defy-right";
+};
+
+&defy_wired {
+    half-id = <1>;
+};
+
+/* Input c is column 15 - c: inputs listed 7..0, then offset by 8. */
+&kscan0 {
+    col-gpios
+        = <&gpio0 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 5 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        , <&gpio0 0 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>
+        ;
+};
+
+&default_transform {
+    col-offset = <8>;
+};

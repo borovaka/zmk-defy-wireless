@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+
+description: LED renderer test sink
+compatible: "vnd,defy-test-leds"
+properties:
+  chain-length:
+    type: int
+    required: true

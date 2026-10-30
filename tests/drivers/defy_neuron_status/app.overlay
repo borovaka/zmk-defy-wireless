@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: MIT */
+
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+    test {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        test_pwm: pwm@0 {
+            compatible = "vnd,pwm";
+            reg = <0x0 0x1000>;
+            #pwm-cells = <3>;
+            status = "okay";
+        };
+    };
+
+    status-leds {
+        compatible = "pwm-leds";
+        led_green: green {
+            pwms = <&test_pwm 0 PWM_USEC(100) PWM_POLARITY_NORMAL>;
+        };
+        led_red: red {
+            pwms = <&test_pwm 1 PWM_USEC(100) PWM_POLARITY_NORMAL>;
+        };
+    };
+};

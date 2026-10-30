@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+
+CONFIG_ARM_MPU=y
+CONFIG_GPIO=y
+
+CONFIG_USE_DT_CODE_PARTITION=y
+CONFIG_BUILD_OUTPUT_HEX=y
+# zmk.uf2, ZMK alone, for the UF2 loader's drive.
+CONFIG_BUILD_OUTPUT_UF2=y
+
+CONFIG_ZMK_KEYBOARD_NAME="Defy"
+CONFIG_ZMK_SPLIT=y
+CONFIG_ZMK_SPLIT_ROLE_CENTRAL=y
+
+CONFIG_ZMK_BLE=y
+CONFIG_ZMK_USB=y
+CONFIG_ZMK_HID_REPORT_TYPE_NKRO=y
+
+# Two peripherals, set here because ZMK's default of 1 wins over a
+# Kconfig.defconfig default. Priority 20 puts ZMK's Bluetooth split after the
+# module's hybrid transport (0).
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS=2
+CONFIG_ZMK_SPLIT_BLE_PRIORITY=20
+
+# The Neuron runs from USB and has no battery. ZMK_BLE implies reporting one,
+# which would show hosts a keyboard at 0%. The halves' batteries reach the
+# Neuron through the module's own telemetry, which ZMK's battery fetching
+# would duplicate.
+CONFIG_ZMK_BATTERY_REPORTING=n
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=n
+
+# Bonds for ten host profiles and the two halves: ZMK's profile count is this
+# less the split peripherals. Zephyr stores bonds by address and ZMK its
+# profiles by number, so raising it keeps every pairing.
+CONFIG_BT_MAX_PAIRED=12
+# The two halves and up to seven hosts at once. ZMK keeps every bonded host in
+# range connected, not only the selected one, and each connection costs RAM.
+CONFIG_BT_MAX_CONN=9
+
+# Saves about 7 KiB of flash. The controller then has no resolving list, and
+# once any bond has shared an identity key, as a Mac's does, Zephyr holds every
+# connection attempt until the target advertises again, with no timeout.
+# drivers/split/zmk-split-central.patch bounds those attempts.
+CONFIG_BT_CTLR_PRIVACY=n
+
+# ZMK's split command queue also disconnects a half whose key reports stopped
+# (docs/ble-input-recovery.md), which needs more than the 512-byte default.
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_SPLIT_RUN_STACK_SIZE=1024
+
+CONFIG_SPI=y
+CONFIG_MAIN_STACK_SIZE=4096
+CONFIG_STACK_SENTINEL=y
+
+# Flash savings.
+CONFIG_CBPRINTF_FP_SUPPORT=n
+CONFIG_MBEDTLS_CIPHER_MODE_CBC_ENABLED=n
+CONFIG_BT_ASSERT_VERBOSE=n
+
+# No 32 kHz crystal: P0.00 and P0.01 carry cable SPI.
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC=y
+
+# Settings storage
+CONFIG_NVS=y
+CONFIG_SETTINGS_NVS=y
+CONFIG_FLASH=y
+CONFIG_FLASH_PAGE_LAYOUT=y
+CONFIG_FLASH_MAP=y

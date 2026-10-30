@@ -1,0 +1,188 @@
+# SPDX-License-Identifier: MIT
+
+menuconfig DEFY_HYBRID
+    bool "Defy automatic cable and Bluetooth split transport"
+    default y
+    depends on ZMK_SPLIT && ZMK_SPLIT_BLE && SPI && !ZMK_SPLIT_WIRED
+    depends on DT_HAS_DYGMA_DEFY_WIRED_PERIPHERAL_ENABLED || DT_HAS_DYGMA_DEFY_NEURON_CABLES_ENABLED
+    select DEFY_WIRED
+    help
+      Keeps both of a half's links to the Neuron up, the cable and ZMK's
+      Bluetooth split, and has the Neuron pick one for each half. Its split
+      transport, which ZMK enables at priority 0, drives the cable and ZMK's
+      Bluetooth transport beneath it. See docs/automatic-transports.md.
+
+if DEFY_HYBRID
+
+if !ZMK_SPLIT_ROLE_CENTRAL
+
+config DEFY_HYBRID_PERIPHERAL_POLL_MS
+    int "Half transport status interval in milliseconds"
+    default 20
+    range 5 100
+    help
+      How often a half checks both links' status while keys are in use.
+
+config DEFY_HYBRID_IDLE_TIMEOUT_MS
+    int "Milliseconds without key activity before connected idle"
+    default 30000
+    range 100 3600000
+    help
+      Time without a key change, with no key held, after which a half polls
+      less often. See connected idle in docs/power-and-wake.md.
+
+config DEFY_HYBRID_IDLE_STATUS_POLL_MS
+    int "Idle half transport status interval in milliseconds"
+    default 100
+    range 20 500
+    help
+      How often an idle half checks both links' status.
+
+config DEFY_HYBRID_IDLE_CABLE_POLL_MS
+    int "Idle connected cable poll interval in milliseconds"
+    default 20
+    range 2 100
+    help
+      How often an idle half polls a connected cable.
+
+config DEFY_HYBRID_IDLE_CABLE_PROBE_MS
+    int "Idle disconnected cable probe interval in milliseconds"
+    default 100
+    range 20 1000
+    help
+      How often an idle half probes a cable that is not connected.
+
+config DEFY_HYBRID_CABLE_PROBE_MS
+    int "Disconnected half cable probe interval in milliseconds"
+    default 20
+    range 5 100
+    help
+      How often a half probes a cable that is not connected while keys are
+      in use.
+
+config DEFY_HYBRID_SNAPSHOT_INTERVAL_MS
+    int "Half Bluetooth snapshot interval in milliseconds"
+    default 100
+    range 20 500
+    help
+      How often a half connected over Bluetooth notifies the Neuron of all
+      its key positions, which puts them right after a lost notification.
+
+endif
+
+if ZMK_SPLIT_ROLE_CENTRAL
+
+config DEFY_HYBRID_QUEUE_SIZE
+    int "Neuron pending snapshot capacity"
+    default 128
+    range 16 512
+    help
+      Key snapshots from both links that the Neuron can hold before it
+      turns them into ZMK key events. A full queue holds back the cable's
+      acknowledgement, and the half sends the snapshot again.
+
+config DEFY_HYBRID_BLE_TIMEOUT_MS
+    int "Neuron Bluetooth snapshot timeout in milliseconds"
+    default 1000
+    range 500 5000
+    help
+      How long the Neuron keeps using a half's last Bluetooth snapshot
+      without a new one before it releases the half's keys.
+
+config DEFY_HYBRID_HANDOFF_GRACE_MS
+    int "Cable to Bluetooth handoff grace period in milliseconds"
+    default 200
+    range 50 500
+    help
+      After a half's cable drops, how long the Neuron waits for a Bluetooth
+      snapshot newer than the loss before it releases the half's keys.
+
+endif
+
+endif
+
+menuconfig DEFY_WIRED
+    bool "Defy cable split transport"
+    default y
+    depends on ZMK_SPLIT && SPI
+    depends on DT_HAS_DYGMA_DEFY_WIRED_PERIPHERAL_ENABLED || DT_HAS_DYGMA_DEFY_NEURON_CABLES_ENABLED
+    # The cable runs beside ZMK's Bluetooth split, under the hybrid transport.
+    depends on DEFY_HYBRID && !ZMK_SPLIT_WIRED
+    # The Neuron is the SPI slave on both cables.
+    select SPI_SLAVE if ZMK_SPLIT_ROLE_CENTRAL
+    select SPI_ASYNC if ZMK_SPLIT_ROLE_CENTRAL
+    help
+      The split link over the stock cable, with this port's SPI protocol: a
+      half polls as SPI master, and the Neuron answers on both sockets as SPI
+      slave. DEFY_HYBRID selects it.
+
+if DEFY_WIRED
+
+if !ZMK_SPLIT_ROLE_CENTRAL
+
+config DEFY_WIRED_PRIORITY
+    int "Half cable transport priority"
+    default 10
+    range 0 99
+    help
+      The cable's place among a half's split transports. ZMK enables the
+      first available transport in the order of the string
+      "<priority>_<name>", not of the number. 10 sorts after the hybrid
+      transport's 0, which ZMK selects and which drives
+      the cable itself, and before the 20 the boards give
+      ZMK_SPLIT_BLE_PRIORITY.
+
+config DEFY_WIRED_POLL_INTERVAL_MS
+    int "Half cable poll interval in milliseconds"
+    default 2
+    range 1 20
+    help
+      How often a half polls a connected cable while keys are in use.
+
+config DEFY_WIRED_PERIPHERAL_TIMEOUT_MS
+    int "Half acknowledgement timeout in milliseconds"
+    default 100
+    range 50 2000
+    help
+      Time without a valid acknowledgement after which a half drops the
+      cable connection and starts a new session.
+
+config DEFY_WIRED_PERIPHERAL_STACK_SIZE
+    int "Half cable worker stack size"
+    default 4096
+    help
+      Stack of the half's thread that polls the cable.
+
+config DEFY_WIRED_PERIPHERAL_THREAD_PRIORITY
+    int "Half cable worker priority"
+    default 5
+    help
+      The thread runs at K_PRIO_PREEMPT() of this value.
+
+endif
+
+if ZMK_SPLIT_ROLE_CENTRAL
+
+config DEFY_WIRED_CENTRAL_TIMEOUT_MS
+    int "Neuron disconnect timeout in milliseconds"
+    default 250
+    range 50 2000
+    help
+      Time without valid data after which the Neuron gives up on a cable
+      and releases that half's keys.
+
+config DEFY_WIRED_CENTRAL_STACK_SIZE
+    int "Neuron cable worker stack size"
+    default 4096
+    help
+      Stack of the Neuron's thread that services both cable sockets.
+
+config DEFY_WIRED_CENTRAL_THREAD_PRIORITY
+    int "Neuron cable worker priority"
+    default 5
+    help
+      The thread runs at K_PRIO_PREEMPT() of this value.
+
+endif
+
+endif

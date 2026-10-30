@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  ISSI IS31FL3743B LED matrix driver on SPI, exposed as an LED strip.
+
+  Each pixel is a group of consecutive PWM registers on page 0, one per entry
+  in color-mapping. pwm-registers gives the first register of each pixel. The
+  defaults for the configuration registers are the stock Defy values.
+
+compatible: "issi,is31fl3743b"
+
+include: [spi-device.yaml, led-strip.yaml]
+
+properties:
+  sdb-gpios:
+    type: phandle-array
+    description: |
+      Hardware shutdown input SDB, active when the chip is on. The driver keeps
+      the chip shut down while every pixel is off.
+
+  pwm-registers:
+    type: uint8-array
+    required: true
+    description: |
+      First PWM register (0x01-0xC6) of each pixel, in pixel order. The PWM
+      register for SWx, CSy is (x - 1) * 18 + y.
+
+  config-register:
+    type: int
+    default: 0x29
+    description: |
+      Configuration register, page 2, 00h. The default selects SW1-SW9 and
+      normal operation.
+
+  global-current:
+    type: int
+    default: 0xff
+    description: Global current control register, page 2, 01h.
+
+  pull-register:
+    type: int
+    default: 0xb3
+    description: |
+      Pull-down/up resistor selection register, page 2, 02h. The default turns
+      on the 180 degree phase delay with a 2 kOhm SW pull-down and CS pull-up.
+
+  scaling:
+    type: int
+    default: 0xff
+    description: Value written to every scaling register on page 1.

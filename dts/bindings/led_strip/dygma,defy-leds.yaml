@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  The Defy's lights as one LED strip: the per-key LEDs first, then the
+  underglow chain.
+
+compatible: "dygma,defy-leds"
+
+properties:
+  chain-length:
+    type: int
+    required: true
+    description: Number of pixels, the sum of the parts' chain-length.
+
+  key-leds:
+    type: phandle
+    required: true
+    description: LED strip of the per-key LEDs.
+
+  underglow:
+    type: phandle
+    required: true
+    description: LED strip of the underglow chain.
+
+  underglow-power-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      Switches the underglow chain's supply (UG_EN). The LEDs draw current even
+      when dark, so the supply is on only while an underglow LED is lit.
+
+  underglow-power-on-delay-us:
+    type: int
+    default: 1000
+    description: |
+      Wait after switching the underglow supply on, before sending a frame.
+      The default is a guess; nothing about the chain's power-up is measured.
+
+  underglow-inverted:
+    type: boolean
+    description: |
+      The underglow data line passes through an inverter. RP2040 only: inverts
+      the output of the underglow strip's data pin, its gpios property, once
+      the strip driver has set the pin up.

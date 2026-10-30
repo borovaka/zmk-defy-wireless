@@ -1,0 +1,68 @@
+/*
+ * SPDX-License-Identifier: MIT
+ */
+
+&pinctrl {
+    /* Cable 1. The Neuron is the SPI slave on both cables. */
+    defy_cable1: defy_cable1 {
+        group1 {
+            psels = <NRF_PSEL(SPIS_MISO, 0, 0)>;
+        };
+        group2 {
+            psels = <NRF_PSEL(SPIS_MOSI, 0, 20)>,
+                    <NRF_PSEL(SPIS_SCK, 0, 17)>;
+        };
+        group3 {
+            psels = <NRF_PSEL(SPIS_CSN, 0, 3)>;
+            bias-pull-up;
+        };
+    };
+
+    /* Cable 2. */
+    defy_cable2: defy_cable2 {
+        group1 {
+            psels = <NRF_PSEL(SPIS_MISO, 1, 9)>;
+        };
+        group2 {
+            psels = <NRF_PSEL(SPIS_MOSI, 0, 11)>,
+                    <NRF_PSEL(SPIS_SCK, 0, 1)>;
+        };
+        group3 {
+            psels = <NRF_PSEL(SPIS_CSN, 0, 2)>;
+            bias-pull-up;
+        };
+    };
+
+    /*
+     * I2C to the halves' bootloaders through both cables: H0D1 drive without
+     * pull resistors, as stock firmware drives the cable I2C pins.
+     */
+    defy_update_i2c: defy_update_i2c {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 4)>, <NRF_PSEL(TWIM_SCL, 0, 5)>;
+            bias-disable;
+            nordic,drive-mode = <NRF_DRIVE_H0D1>;
+        };
+    };
+
+    defy_update_i2c_sleep: defy_update_i2c_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 4)>, <NRF_PSEL(TWIM_SCL, 0, 5)>;
+            low-power-enable;
+        };
+    };
+
+    /* The status LED: green on P0.10, red on P0.09. */
+    defy_status_led: defy_status_led {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 10)>, <NRF_PSEL(PWM_OUT1, 0, 9)>;
+        };
+    };
+
+    defy_status_led_sleep: defy_status_led_sleep {
+        group1 {
+            psels = <NRF_PSEL(PWM_OUT0, 0, 10)>, <NRF_PSEL(PWM_OUT1, 0, 9)>;
+            low-power-enable;
+        };
+    };
+};

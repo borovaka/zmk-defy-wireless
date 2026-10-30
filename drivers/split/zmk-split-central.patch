@@ -1,0 +1,352 @@
+ZMK's app/src/split/bluetooth/central.c with Defy's split scanning recovery.
+
+zmk_split_central.cmake checks that ZMK's file has the SHA-256 below, copies
+it into the build directory and applies this patch with git apply, which
+refuses any hunk that does not match exactly. A ZMK update that changes the
+file stops the build until this patch is reviewed against it. Every change
+but the <zephyr/sys/atomic.h> include and the retry_scanning() call is marked
+"Defy:" in the patched file; docs/ble-input-recovery.md explains them.
+
+Upstream: zmkfirmware/zmk 4dd95d7840eb3d5a3f59bb29fbf1ab054715ef85
+SHA-256: 46455685cbaa16e4508a70fdd27ca5301f0288165efd6b343598eb963c9b0f3b
+
+SPDX-License-Identifier: MIT
+
+--- a/central.c
++++ b/central.c
+@@ -13,6 +13,7 @@
+ #include <zephyr/bluetooth/gatt.h>
+ #include <zephyr/bluetooth/hci.h>
+ #include <zephyr/settings/settings.h>
++#include <zephyr/sys/atomic.h>
+ #include <zephyr/sys/byteorder.h>
+ 
+ #include <zephyr/logging/log.h>
+@@ -34,6 +35,9 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+ #include <zmk/hid_indicators_types.h>
+ #include <zmk/physical_layouts.h>
+ 
++/* Defy: the hybrid central's calls, below. */
++#include <dygma/defy_split_central.h>
++
+ static int start_scanning(void);
+ 
+ #define POSITION_STATE_DATA_LEN 16
+@@ -479,7 +483,8 @@ static uint8_t split_central_battery_level_read_func(struct bt_conn *conn, uint8
+ 
+ static int split_central_subscribe(struct bt_conn *conn, struct bt_gatt_subscribe_params *params) {
+     atomic_set(params->flags, BT_GATT_SUBSCRIBE_FLAG_NO_RESUB);
+-    int err = bt_gatt_subscribe(conn, params);
++    /* Defy: key position notifications go to the hybrid central. */
++    int err = defy_hybrid_ble_subscribe(conn, params);
+     switch (err) {
+     case -EALREADY:
+         LOG_DBG("[ALREADY SUBSCRIBED]");
+@@ -738,7 +743,8 @@ static uint8_t split_central_service_discovery_func(struct bt_conn *conn,
+     slot->discover_params.func = split_central_chrc_discovery_func;
+     slot->discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+ 
+-    int err = bt_gatt_discover(conn, &slot->discover_params);
++    /* Defy: the hybrid central follows discovery for its health check. */
++    int err = defy_hybrid_ble_discover(conn, &slot->discover_params);
+     if (err) {
+         LOG_ERR("Failed to start discovering split service characteristics (err %d)", err);
+     }
+@@ -763,7 +769,8 @@ static void split_central_process_connection(struct bt_conn *conn) {
+         slot->discover_params.end_handle = 0xffff;
+         slot->discover_params.type = BT_GATT_DISCOVER_PRIMARY;
+ 
+-        err = bt_gatt_discover(slot->conn, &slot->discover_params);
++        /* Defy: as above. */
++        err = defy_hybrid_ble_discover(slot->conn, &slot->discover_params);
+         if (err) {
+             LOG_ERR("Discover failed(err %d)", err);
+             return;
+@@ -781,20 +788,126 @@ static void split_central_process_connection(struct bt_conn *conn) {
+     start_scanning();
+ }
+ 
++/* Defy: scanning that recovers on its own. It replaces ZMK's stop_scanning()
++ * and start_scanning(): dropped reports restart the scan, failed scan
++ * operations retry from the work queue, connection attempts time out, and
++ * a half rejected for an identity conflict is held off. See
++ * docs/ble-input-recovery.md in zmk-defy-wireless. */
++
++/* Set while a scan start or stop is in progress, so the two never overlap. */
++static atomic_t scan_operation;
++
++/* BT_LE_SCAN_PASSIVE filters duplicates, so the controller reports each
++ * address once per scan. After a report is dropped, start_scanning()
++ * restarts a running scan so that half is reported again. */
++static bool scan_restart;
++
++static void scan_retry_handler(struct k_work *work) {
++    ARG_UNUSED(work);
++    start_scanning();
++}
++
++static K_WORK_DELAYABLE_DEFINE(scan_retry_work, scan_retry_handler);
++static K_WORK_DELAYABLE_DEFINE(hold_off_work, scan_retry_handler);
++
++#define SCAN_RETRY_MS 500
++
++/* Starts scanning again SCAN_RETRY_MS later, from the work queue rather than
++ * the callback where a scan operation just failed. */
++static void retry_scanning(void) {
++    if (is_enabled) {
++        k_work_reschedule(&scan_retry_work, K_MSEC(SCAN_RETRY_MS));
++    }
++}
++
++/* Drops the report of a half that is held off and looks again when the
++ * hold ends, so a persistent identity conflict cannot loop reconnects. */
++static bool hold_connection(int slot) {
++    int64_t wait = defy_hybrid_ble_hold_off(slot);
++    if (wait <= 0) {
++        return false;
++    }
++    scan_restart = true;
++    k_work_schedule(&hold_off_work, K_MSEC(wait));
++    return true;
++}
++
++/* With controller privacy off, the controller has no resolving list. Once
++ * any bond has shared an identity key, as a Mac's does, Zephyr makes every
++ * create wait in the host for the target's next advertisement, with no
++ * timeout. The halves' fixed addresses need no resolving, but their creates
++ * wait the same way. start_scanning() holds off while any attempt is
++ * pending, so one half that stops advertising would block the other. Cancel
++ * attempts that outlast the half's advertising interval plus Zephyr's 3 s
++ * initiation timeout; the cancellation reaches split_central_connected()
++ * with an error, which releases the slot and retries. */
++#define SPLIT_CONNECT_TIMEOUT_MS 5000
++#define SPLIT_CONNECT_CANCEL_RETRY_MS 1000
++
++static void connect_timeout_handler(struct k_work *work);
++
++static K_WORK_DELAYABLE_DEFINE(connect_timeout_work, connect_timeout_handler);
++
++static void connect_timeout_handler(struct k_work *work) {
++    ARG_UNUSED(work);
++    for (int i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
++        struct bt_conn *conn = peripherals[i].conn;
++        struct bt_conn_info info;
++
++        if (peripherals[i].state != PERIPHERAL_SLOT_STATE_CONNECTING || conn == NULL ||
++            bt_conn_get_info(conn, &info) < 0 || info.state != BT_CONN_STATE_CONNECTING) {
++            continue;
++        }
++
++        LOG_WRN("Cancelling split connection attempt after %d ms", SPLIT_CONNECT_TIMEOUT_MS);
++        int err = bt_conn_disconnect(conn, BT_HCI_ERR_UNKNOWN_CONN_ID);
++        if (err < 0 && peripherals[i].state == PERIPHERAL_SLOT_STATE_CONNECTING &&
++            peripherals[i].conn == conn) {
++            LOG_ERR("Cannot cancel split connection attempt (err %d)", err);
++            k_work_reschedule(&connect_timeout_work, K_MSEC(SPLIT_CONNECT_CANCEL_RETRY_MS));
++        }
++    }
++}
++
++static int create_connection(const bt_addr_le_t *addr, const struct bt_le_conn_param *param,
++                             struct bt_conn **conn) {
++    int err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, conn);
++    if (err == 0) {
++        k_work_reschedule(&connect_timeout_work, K_MSEC(SPLIT_CONNECT_TIMEOUT_MS));
++        if (!is_enabled && *conn != NULL) {
++            /* Disabled while the create was in flight, too late for
++             * split_central_bt_set_enabled() to cancel it. */
++            bt_conn_disconnect(*conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
++        }
++    }
++    return err;
++}
++
+ static int stop_scanning(void) {
+     LOG_DBG("Stopping peripheral scanning");
++    k_work_cancel_delayable(&scan_retry_work);
++    if (!atomic_cas(&scan_operation, 0, 1)) {
++        return -EBUSY;
++    }
++
+     is_scanning = false;
+ 
+     int err = bt_le_scan_stop();
++    atomic_clear(&scan_operation);
+     if (err < 0) {
+         LOG_ERR("Stop LE scan failed (err %d)", err);
+-        return err;
+     }
+ 
+-    return 0;
++    return err;
+ }
+ 
+ static bool split_central_eir_found(const bt_addr_le_t *addr) {
++    /* Defy: a report still queued when split Bluetooth was disabled must not
++     * start a connection. */
++    if (!is_enabled) {
++        return false;
++    }
++
+     LOG_DBG("Found the split service");
+ 
+     // Reserve peripheral slot. Once the central has bonded to its peripherals,
+@@ -803,13 +916,24 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
+     int slot_idx = reserve_peripheral_slot(addr);
+     if (slot_idx < 0) {
+         LOG_INF("Unable to reserve peripheral slot (err %d)", slot_idx);
++        /* Defy: the controller reports each address once per scan. */
++        scan_restart = true;
+         return false;
+     }
+     struct peripheral_slot *slot = &peripherals[slot_idx];
++    /* Defy: a half rejected for claiming the other side's identity waits. */
++    if (hold_connection(slot_idx)) {
++        release_peripheral_slot(slot_idx);
++        return false;
++    }
+ 
+     // Stop scanning so we can connect to the peripheral device.
+     int err = stop_scanning();
+     if (err < 0) {
++        /* Defy: free the slot and scan again rather than leave it reserved. */
++        release_peripheral_slot(slot_idx);
++        scan_restart = true;
++        retry_scanning();
+         return false;
+     }
+ 
+@@ -817,11 +941,12 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
+     struct bt_le_conn_param *param =
+         BT_LE_CONN_PARAM(CONFIG_ZMK_SPLIT_BLE_PREF_INT, CONFIG_ZMK_SPLIT_BLE_PREF_INT,
+                          CONFIG_ZMK_SPLIT_BLE_PREF_LATENCY, CONFIG_ZMK_SPLIT_BLE_PREF_TIMEOUT);
+-    err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &slot->conn);
++    /* Defy: bt_conn_le_create() with a timeout; see create_connection(). */
++    err = create_connection(addr, param, &slot->conn);
+     if (err < 0) {
+         LOG_ERR("Create conn failed (err %d) (create conn? 0x%04x)", err, BT_HCI_OP_LE_CREATE_CONN);
+         release_peripheral_slot(slot_idx);
+-        start_scanning();
++        retry_scanning();
+     }
+ 
+     return false;
+@@ -882,41 +1007,61 @@ static void split_central_device_found(const bt_addr_le_t *addr, int8_t rssi, ui
+     }
+ }
+ 
++/* Defy: replaced for scanning that recovers on its own, described above. */
+ static int start_scanning(void) {
+     if (!is_enabled) {
+-        LOG_DBG("Not scanning, we're disabled");
++        k_work_cancel_delayable(&scan_retry_work);
+         return 0;
+     }
+-
+-    // No action is necessary if central is already scanning.
+-    if (is_scanning) {
+-        LOG_DBG("Scanning already running");
++    /* Not k_work_delayable_is_pending(): the retry handler itself calls this. */
++    if (k_work_delayable_remaining_get(&scan_retry_work) > 0) {
++        return 0;
++    }
++    if (!atomic_cas(&scan_operation, 0, 1)) {
++        retry_scanning();
++        return 0;
++    }
++    if (!is_enabled || (is_scanning && !scan_restart)) {
++        atomic_clear(&scan_operation);
+         return 0;
+     }
+ 
+-    // If all the devices are connected, there is no need to scan.
+-    bool has_unconnected = false;
++    bool has_open = false;
+     for (int i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
+-        if (peripherals[i].conn == NULL) {
+-            has_unconnected = true;
+-            break;
++        if (peripherals[i].state == PERIPHERAL_SLOT_STATE_CONNECTING) {
++            atomic_clear(&scan_operation);
++            return 0;
++        }
++        if (peripherals[i].state == PERIPHERAL_SLOT_STATE_OPEN) {
++            has_open = true;
+         }
+     }
+-    if (!has_unconnected) {
+-        LOG_DBG("All devices are connected, scanning is unnecessary");
++    if (!has_open) {
++        atomic_clear(&scan_operation);
+         return 0;
+     }
+ 
+-    // Start scanning otherwise.
++    if (is_scanning) {
++        bt_le_scan_stop();
++    }
++    scan_restart = false;
+     is_scanning = true;
+     int err = bt_le_scan_start(BT_LE_SCAN_PASSIVE, split_central_device_found);
+     if (err < 0) {
++        is_scanning = false;
++        if (err == -EALREADY) {
++            bt_le_scan_stop();
++        }
+         LOG_ERR("Scanning failed to start (err %d)", err);
+-        return err;
+     }
++    atomic_clear(&scan_operation);
+ 
+-    LOG_DBG("Scanning successfully started");
+-    return 0;
++    if (!is_enabled) {
++        stop_scanning();
++    } else if (err < 0) {
++        retry_scanning();
++    }
++    return err;
+ }
+ 
+ static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
+@@ -937,7 +1082,7 @@ static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
+ 
+         release_peripheral_slot_for_conn(conn);
+ 
+-        start_scanning();
++        retry_scanning();
+         return;
+     }
+ 
+@@ -1155,7 +1300,10 @@ static int zmk_split_bt_central_init(void) {
+ #endif // IS_ENABLED(CONFIG_SETTINGS)
+ }
+ 
+-SYS_INIT(zmk_split_bt_central_init, APPLICATION, CONFIG_ZMK_BLE_INIT_PRIORITY);
++/* Defy: this copy builds with the Defy module, whose sources link before ZMK's.
++ * At the same priority it would start before zmk_ble_init() in ble.c, so it
++ * runs one step later, keeping ZMK's order. */
++SYS_INIT(zmk_split_bt_central_init, APPLICATION, UTIL_INC(CONFIG_ZMK_BLE_INIT_PRIORITY));
+ 
+ static int zmk_split_bt_central_listener_cb(const zmk_event_t *eh) {
+     if (as_zmk_physical_layout_selection_changed(eh)) {
+@@ -1213,7 +1361,9 @@ static int split_central_bt_set_enabled(bool enabled) {
+         }
+ 
+         for (int i = 0; i < ZMK_SPLIT_BLE_PERIPHERAL_COUNT; i++) {
+-            if (peripherals[i].state != PERIPHERAL_SLOT_STATE_CONNECTED) {
++            /* Defy: cancel pending connection attempts too, not only
++             * connected halves. */
++            if (peripherals[i].conn == NULL) {
+                 continue;
+             }
+ 
+@@ -1285,6 +1435,7 @@ void peripheral_event_work_callback(struct k_work *work) {
+     struct peripheral_event_wrapper ev;
+     while (k_msgq_get(&peripheral_event_msgq, &ev, K_NO_WAIT) == 0) {
+         LOG_DBG("Trigger key position state change of type %d", ev.event.type);
+-        zmk_split_transport_central_peripheral_event_handler(&bt_central, ev.source, ev.event);
++        /* Defy: the hybrid central maps the slot to its side first. */
++        defy_hybrid_central_peripheral_event(ev.source, ev.event);
+     }
+ }

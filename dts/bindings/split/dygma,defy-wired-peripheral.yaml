@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  A Defy half's cable link to the Neuron: the SPI device the half polls as
+  master. Each half's devicetree has exactly one.
+
+compatible: "dygma,defy-wired-peripheral"
+
+include: spi-device.yaml
+
+properties:
+  half-id:
+    type: int
+    required: true
+    enum: [0, 1]
+    description: |
+      Which half this is, 0 for the left and 1 for the right. A half reports
+      only its own key positions.

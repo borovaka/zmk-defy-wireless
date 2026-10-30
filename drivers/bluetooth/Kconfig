@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_BT_HCI_SPI
+    bool "Bluetooth HCI over SPI to the Defy's nRF52820"
+    default y
+    depends on DT_HAS_DYGMA_DEFY_BT_HCI_SPI_ENABLED
+    depends on BT_HCI && BT_DRIVERS
+    select BT_SPI
+    select REBOOT
+    help
+      Zephyr's HCI SPI driver reworked for the Defy: no reset line, limited
+      waits, data ready as a level, and power off with the RP2040.
+
+config DEFY_BT_PERSISTENT_ID
+    bool "Save the Defy Bluetooth identity before advertising"
+    default y
+    depends on DEFY_BT_HCI_SPI && BT_SETTINGS && BT_BROADCASTER && !BT_PRIVACY
+    help
+      Wraps bt_le_adv_start() to save the half's Bluetooth identity to
+      settings before it first advertises with it, so that the half keeps
+      its address across restarts and the Neuron's bond still fits. The
+      wrap also lets half sleep hold off advertising while it shuts
+      Bluetooth down.
+
+config DEFY_RADIO_INSTALL
+    bool "Install the radio firmware through Dygma's rf_bootloader"
+    depends on DEFY_BT_HCI_SPI
+    help
+      Embeds the nRF52820 firmware from the radio build and, whenever the
+      driver starts the radio, checks it in Dygma's rf_bootloader and
+      installs it there if the radio holds anything else, as Dygma's
+      keyscanner installs its own radio application. The build needs
+      DEFY_RADIO_IMAGE_SOURCE, the C file scripts/package_radio.py writes;
+      scripts/build passes it.

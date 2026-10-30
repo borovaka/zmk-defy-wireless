@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+
+rsource "drivers/Kconfig"
+rsource "diagnostics/Kconfig"
+rsource "power/Kconfig"
+rsource "battery/Kconfig"
+rsource "lighting/Kconfig"
+rsource "bootloader/Kconfig"
+rsource "status/Kconfig"
+rsource "updater/Kconfig"
+rsource "studio/Kconfig"
+rsource "soc/rp2040/Kconfig"

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# One-time setup of the west workspace next to this repository:
+#
+#   ../zmk-workspace/zmk                    ZMK at the revision in config/west.yml
+#   ../zmk-workspace/zmk/zephyr, modules/   fetched by west in the container
+#
+# With --container it runs west directly, for when it already runs in ZMK's
+# container, as in CI.
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ws="$(dirname "$repo")/zmk-workspace"
+rev="$(sed -n 's/^ *revision: *//p' "$repo/config/west.yml" | head -n 1)"
+: "${rev:?no ZMK revision in config/west.yml}"
+
+mkdir -p "$ws"
+if [ ! -d "$ws/zmk/.git" ]; then
+    git clone --depth 1 https://github.com/zmkfirmware/zmk "$ws/zmk"
+fi
+if [ "$(git -C "$ws/zmk" rev-parse HEAD)" != "$rev" ]; then
+    git -C "$ws/zmk" fetch --depth 1 origin "$rev"
+    git -C "$ws/zmk" checkout --detach "$rev"
+fi
+
+if [ "${1:-}" = --container ]; then
+    cd "$ws/zmk"
+    in_container=(bash -c)
+else
+    in_container=("$repo/scripts/zmk" bash -c)
+fi
+# Shallow fetches into a fresh clone sometimes fail with "remote did not send
+# all necessary objects" and succeed on the next attempt, so retry.
+"${in_container[@]}" '
+    set -e
+    [ -d .west ] || west init -l app
+    for attempt in 1 2 3 4 5; do
+        west update --narrow --fetch-opt=--depth=1 && exit 0
+        echo "west update failed (attempt $attempt), retrying" >&2
+    done
+    exit 1
+'

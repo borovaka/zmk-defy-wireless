@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: MIT */
+
+&spi0 {
+    battery_half: wired@0 {
+        compatible = "dygma,defy-wired-peripheral";
+        reg = <0>;
+        spi-max-frequency = <1000000>;
+        half-id = <1>;
+    };
+};

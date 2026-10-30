@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+description: Defy battery test bus
+compatible: "vnd,defy-battery-bus"
+include: i2c-controller.yaml

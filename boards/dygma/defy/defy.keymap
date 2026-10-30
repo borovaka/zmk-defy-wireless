@@ -1,0 +1,60 @@
+/*
+ * The board's default keymap: the layout built into Dygma's firmware. Bazecor
+ * installs a different default, which config/defy_neuron.keymap follows. The
+ * halves, the Studio test and a Neuron whose config has no keymap use this one.
+ *
+ * Changes from the layout in Dygma's firmware:
+ * - The LED-effect key (right thumb, upper inner) toggles the NUM layer, which
+ *   stock firmware only reaches through Bazecor.
+ * - NUM has &bootloader, &sys_reset and &studio_unlock on unused left keys,
+ *   and &bootloader and &studio_unlock again on unused right keys.
+ * - Eight reserved layers, which ZMK Studio can turn into new layers. Ten in
+ *   all, as in Bazecor.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/keys.h>
+
+#define BASE 0
+#define NUM 1
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        base_layer {
+            display-name = "Base";
+            bindings = <
+&kp ESC   &kp N1 &kp N2 &kp N3 &kp N4 &kp N5 &kp N6          &kp N7 &kp N8 &kp N9    &kp N0  &kp MINUS &kp EQUAL &kp BSPC
+&kp TAB   &kp Q  &kp W  &kp E  &kp R  &kp T  &kp C_VOL_UP    &kp Y  &kp U  &kp I     &kp O   &kp P     &kp LBKT  &kp RBKT
+&kp CAPS  &kp A  &kp S  &kp D  &kp F  &kp G  &kp C_VOL_DN    &kp H  &kp J  &kp K     &kp L   &kp SEMI  &kp SQT   &kp RSHFT
+&kp BSLH  &kp Z  &kp X  &kp C  &kp V  &kp B                         &kp N  &kp M     &kp COMMA &kp DOT &kp FSLH  &kp RSHFT
+&kp LCTRL &kp LGUI &kp BSPC &kp DEL                                         &tog NUM  &kp HOME &kp UP  &kp END
+&kp LSHFT &kp LALT &kp RET  &kp SPACE                                       &kp RET &kp LEFT &kp DOWN &kp RIGHT
+            >;
+        };
+
+        num_layer {
+            display-name = "Num";
+            bindings = <
+&kp ESC   &kp F1   &kp F2   &kp F3    &kp F4  &kp F5 &kp F6    &kp F7       &kp F8 &kp F9 &kp F10 &kp F11         &kp F12 &kp BSPC
+&kp TAB   &none    &kp UP   &none     &none   &none  &none     &kp KP_MINUS &kp N7 &kp N8 &kp N9  &kp KP_DIVIDE   &bootloader    &kp RET
+&kp CAPS  &kp LEFT &kp DOWN &kp RIGHT &none   &none  &none     &kp KP_PLUS  &kp N4 &kp N5 &kp N6  &kp KP_MULTIPLY &studio_unlock &kp BSLH
+&kp LSHFT &kp BSLH &bootloader &sys_reset &studio_unlock &none                &kp KP_DOT   &kp N1 &kp N2 &kp N3  &kp UP  &kp RSHFT
+&kp LCTRL &kp LGUI &kp LALT &kp SPACE                                       &kp N0    &kp SPACE &kp LEFT &kp DOWN
+&kp SPACE &kp BSPC &kp RET  &kp DEL                                         &to BASE &kp DEL &kp RCTRL &kp RIGHT
+            >;
+        };
+
+        layer_2 { status = "reserved"; };
+        layer_3 { status = "reserved"; };
+        layer_4 { status = "reserved"; };
+        layer_5 { status = "reserved"; };
+        layer_6 { status = "reserved"; };
+        layer_7 { status = "reserved"; };
+        layer_8 { status = "reserved"; };
+        layer_9 { status = "reserved"; };
+    };
+};

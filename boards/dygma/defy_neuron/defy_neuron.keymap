@@ -1,0 +1,7 @@
+/*
+ * The Neuron uses the same keymap as the halves.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "../defy/defy.keymap"

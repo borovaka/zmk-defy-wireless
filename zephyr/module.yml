@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+
+name: zmk-defy-wireless
+build:
+  cmake: .
+  kconfig: Kconfig
+  settings:
+    board_root: .
+    dts_root: .
+    snippet_root: .

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+name: defy-studio-test-transport
+build:
+  cmake: .

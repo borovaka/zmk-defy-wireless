@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+
+config BOARD_DEFY_RF
+    select SOC_NRF52820_QDAA

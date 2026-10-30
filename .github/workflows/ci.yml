@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: MIT
+#
+# Runs scripts/test-host on the runner, and scripts/test and scripts/build with
+# --container inside ZMK's container, which has no Docker.
+#
+# The firmware jobs keep two caches: the west workspace, fetched once per
+# config/west.yml, and ccache's objects. A cache hit returns the same object,
+# so the images do not change.
+#
+# Actions are pinned to commits, with the release in a comment;
+# .github/dependabot.yml keeps them current.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host tests
+    # The container has no clang; the runner has.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/test-host
+
+  test:
+    name: Firmware tests
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    container:
+      # The image scripts/zmk pins.
+      image: zmkfirmware/zmk-dev-arm@sha256:77b62cbc6c62ca0026ed9eb511dd7fc2a13692d1b9ddbaf92bca510612390db8
+    env:
+      # As scripts/zmk sets it: without it ccache refuses every ARM compile.
+      CCACHE_IGNOREOPTIONS: "-specs=*"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Beside the repository, as scripts/setup expects, in the container's paths.
+      - name: Cache paths
+        run: |
+          echo "WEST_WORKSPACE=$(dirname "$PWD")/zmk-workspace" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$(dirname "$PWD")/ccache" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WEST_WORKSPACE }}
+          key: west-${{ hashFiles('config/west.yml') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ github.job }}-${{ hashFiles('config/west.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ github.job }}-${{ hashFiles('config/west.yml') }}-
+            ccache-${{ github.job }}-
+      - run: scripts/setup --container
+      - run: ccache --zero-stats
+      - run: python3 scripts/test --container
+      - run: ccache --show-stats
+        if: always()
+
+  build:
+    name: Firmware builds
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    container:
+      image: zmkfirmware/zmk-dev-arm@sha256:77b62cbc6c62ca0026ed9eb511dd7fc2a13692d1b9ddbaf92bca510612390db8
+    env:
+      # As scripts/zmk sets it: without it ccache refuses every ARM compile.
+      CCACHE_IGNOREOPTIONS: "-specs=*"
+    steps:
+      # With the history and tags, so that git describe gives the module
+      # version a local build of the same commit embeds.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Cache paths
+        run: |
+          echo "WEST_WORKSPACE=$(dirname "$PWD")/zmk-workspace" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$(dirname "$PWD")/ccache" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WEST_WORKSPACE }}
+          key: west-${{ hashFiles('config/west.yml') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ github.job }}-${{ hashFiles('config/west.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ github.job }}-${{ hashFiles('config/west.yml') }}-
+            ccache-${{ github.job }}-
+      - run: scripts/setup --container
+      - run: ccache --zero-stats
+      - run: python3 scripts/build --container all
+      - run: ccache --show-stats
+        if: always()
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware
+          path: firmware/
+          if-no-files-found: error

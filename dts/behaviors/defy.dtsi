@@ -1,0 +1,45 @@
+/*
+ * The Defy's behaviours, which run on the Neuron, and the colour nodes a keymap
+ * fills in. ZMK identifies a behaviour by its node name, in Studio's saved
+ * changes among others, so keep the names.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    behaviors {
+        defy_profiles: profile_chooser {
+            compatible = "dygma,defy-profile-chooser";
+            #binding-cells = <0>;
+            display-name = "Bluetooth profiles";
+        };
+
+        /* Takes a command from dt-bindings/dygma/defy_lighting.h. */
+        defy_lighting: lighting {
+            compatible = "dygma,defy-lighting";
+            #binding-cells = <1>;
+            display-name = "Lighting";
+        };
+
+        defy_battery: battery_display {
+            compatible = "dygma,defy-battery-display";
+            #binding-cells = <0>;
+            display-name = "Battery level";
+        };
+
+        defy_drive: uf2_drive {
+            compatible = "dygma,defy-uf2-drive";
+            #binding-cells = <0>;
+            display-name = "UF2 drive";
+        };
+    };
+
+    /* Empty; a keymap adds layer colours and single keys' colours here. */
+    defy_layer_lighting: layer_lighting {
+        compatible = "dygma,defy-layer-lighting";
+    };
+
+    defy_key_lighting: key_lighting {
+        compatible = "dygma,defy-key-lighting";
+    };
+};

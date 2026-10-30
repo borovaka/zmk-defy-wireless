@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+description: Defy cable test SPI controller, faked by the suites that use it
+compatible: "dygma,wired-test-spi"
+include: spi-controller.yaml

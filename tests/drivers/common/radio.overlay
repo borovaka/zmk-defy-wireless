@@ -1,0 +1,32 @@
+/*
+ * A half's radio, as defy_hci_spi and defy_radio_install see it: the RP2040's
+ * HCI SPI node on the test SPI controller in test_bus.c, with data ready on an
+ * emulated GPIO. fake_radio.c is the radio behind it.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    chosen {
+        zephyr,bt-hci = &radio;
+    };
+};
+
+&bt_hci_userchan {
+    status = "disabled";
+};
+
+&spi0 {
+    compatible = "dygma,radio-test-spi";
+    cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+    radio: bt-hci@0 {
+        compatible = "dygma,defy-bt-hci-spi";
+        reg = <0>;
+        spi-max-frequency = <2000000>;
+        /*
+         * No pull-down, unlike the board: gpio_emul would pull the line low
+         * whenever the driver configures it, though the radio drives it.
+         */
+        irq-gpios = <&gpio0 24 GPIO_ACTIVE_HIGH>;
+    };
+};

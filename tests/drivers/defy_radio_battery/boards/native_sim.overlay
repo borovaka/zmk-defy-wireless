@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: MIT */
+
+/ {
+    i2c1: battery-bus {
+        compatible = "vnd,defy-battery-bus";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        clock-frequency = <100000>;
+        status = "okay";
+    };
+};

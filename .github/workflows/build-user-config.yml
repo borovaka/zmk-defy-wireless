@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+#
+# Builds a keymap repository made from the Defy-Wireless-ZMK template: its
+# config/west.yml pins this module, which pins ZMK. The build runs this
+# module's scripts/build from the revision west fetched, so the workflow's
+# own ref only decides these steps. The "firmware" artifact holds the images,
+# neuron-hybrid.uf2 for the UF2 loader's drive among them, and manifest.json.
+# Called as
+#
+#   jobs:
+#     build:
+#       uses: borovaka/zmk-defy-wireless/.github/workflows/build-user-config.yml@<tag>
+name: Build user config
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: The ZMK config directory, with west.yml, the keymap and .conf files
+        type: string
+        default: config
+      targets:
+        description: The targets to build, separated by spaces
+        type: string
+        default: left-hybrid-radio right-hybrid-radio neuron-hybrid
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    container:
+      # The image this module's scripts/zmk pins.
+      image: zmkfirmware/zmk-dev-arm@sha256:77b62cbc6c62ca0026ed9eb511dd7fc2a13692d1b9ddbaf92bca510612390db8
+    env:
+      CONFIG: ${{ inputs.config }}
+      TARGETS: ${{ inputs.targets }}
+      # As the module's scripts/zmk sets it: without it ccache refuses every
+      # ARM compile, which passes -specs=picolibc.specs.
+      CCACHE_IGNOREOPTIONS: "-specs=*"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # ZMK, Zephyr and the modules are fetched once for each west.yml. This
+      # module and .west are not cached: west init needs a workspace without
+      # .west, and the module is small. ccache keeps the compiled objects
+      # between runs, so a keymap change recompiles only what it touches.
+      - name: Cache paths
+        run: echo "CCACHE_DIR=$(dirname "$PWD")/ccache" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            zmk
+            zephyr
+            modules
+            optional
+          key: west-${{ hashFiles(format('{0}/west.yml', inputs.config)) }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ hashFiles(format('{0}/west.yml', inputs.config)) }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ hashFiles(format('{0}/west.yml', inputs.config)) }}-
+            ccache-
+      # Shallow fetches sometimes fail with "remote did not send all necessary
+      # objects" and succeed on the next attempt.
+      - name: Fetch ZMK and the module
+        run: |
+          west init -l "$CONFIG"
+          for attempt in 1 2 3 4 5; do
+            west update --narrow --fetch-opt=--depth=1 && exit 0
+            echo "west update failed (attempt $attempt), retrying" >&2
+          done
+          exit 1
+      # ZMK's app/ looks for Zephyr inside the ZMK checkout; west put it beside
+      # ZMK, so export its CMake package.
+      - run: west zephyr-export
+      # The Neuron image embeds this repository's name and commit, from the
+      # checkout above. west fetches the module without its tags, so the
+      # module version is the revision config/west.yml names for it.
+      - name: Build
+        run: |
+          module="$(west list -f '{abspath}' zmk-defy-wireless)"
+          # TARGETS is a list separated by spaces, split here on purpose.
+          # shellcheck disable=SC2086
+          python3 "$module/scripts/build" --container --zmk zmk --config "$CONFIG" \
+            --output firmware $TARGETS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firmware
+          path: firmware/
+          if-no-files-found: error

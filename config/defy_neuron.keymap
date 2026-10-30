@@ -1,0 +1,301 @@
+/*
+ * The Defy's keymap, on the Neuron. ZMK finds this file by the board's name.
+ *
+ * Base, Navigation and FKeys follow Dygma's default layout, as Bazecor sets
+ * it up, with this port's controls on keys that layout leaves empty. Mouse is
+ * new. Each comment marked DEMO shows something to try and change; the rest
+ * of ZMK's behaviours are at https://zmk.dev/docs/keymaps.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <behaviors.dtsi>
+#include <behaviors/defy.dtsi>
+#include <dt-bindings/dygma/defy_lighting.h>
+#include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/outputs.h>
+#include <dt-bindings/zmk/pointing.h>
+
+/* The layers' numbers, for &mo, &sl and the lighting blocks below. */
+#define BASE 0
+#define NAV 1
+#define FKEYS 2
+#define MOUSE 3
+
+/*
+ * DEMO: a tap-dance with hold-taps, Dygma's copy key on the left upper outer
+ * thumb. Tap it for Ctrl+C, hold it for Ctrl+V, tap it twice for Ctrl+X, or
+ * tap it and then hold it for Ctrl+Shift+V. On a Mac, change LC to LG for
+ * Cmd. The tap-dance hands the first press to copy_hold only once it has
+ * waited 200 ms for a second, so copy_hold's own 50 ms make a hold 250 ms in
+ * all, as on the second press. https://zmk.dev/docs/keymaps/behaviors/tap-dance
+ */
+/ {
+    behaviors {
+        copy_hold: copy_hold {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            display-name = "Copy key hold";
+            tapping-term-ms = <50>;
+            flavor = "tap-preferred";
+            bindings = <&kp>, <&kp>;
+        };
+
+        cut_hold: cut_hold {
+            compatible = "zmk,behavior-hold-tap";
+            #binding-cells = <2>;
+            display-name = "Cut key hold";
+            tapping-term-ms = <250>;
+            flavor = "tap-preferred";
+            bindings = <&kp>, <&kp>;
+        };
+
+        copy_paste: copy_paste {
+            compatible = "zmk,behavior-tap-dance";
+            #binding-cells = <0>;
+            display-name = "Copy / paste";
+            tapping-term-ms = <200>;
+            bindings = <&copy_hold LC(V) LC(C)>, <&cut_hold LC(LS(V)) LC(X)>;
+        };
+    };
+};
+
+/*
+ * DEMO: hold-tap timing. The thumb keys that are Ctrl or Alt when held and
+ * Backspace or Enter when tapped are &mt, ZMK's mod-tap. Here a key counts
+ * as held after 250 ms, as in Dygma's layout, or as soon as another key is
+ * pressed and released while it is down. A tap and then a hold repeats the
+ * tap, so Backspace can repeat. https://zmk.dev/docs/keymaps/behaviors/hold-tap
+ */
+&mt {
+    tapping-term-ms = <250>;
+    flavor = "balanced";
+    quick-tap-ms = <200>;
+};
+
+/*
+ * DEMO: mouse keys, which CONFIG_ZMK_POINTING in defy_neuron.conf turns on.
+ * Hold the left lower thumb key second from the outside for Mouse: E, S, D
+ * and F move the pointer, W and R scroll up and down, X and V scroll
+ * sideways, and G, T and A click left, right and middle. A computer paired
+ * over Bluetooth before mouse keys were on must pair again to use them.
+ * https://zmk.dev/docs/keymaps/behaviors/mouse-emulation
+ *
+ * Bluetooth: the right lower outer thumb key opens the profile chooser, to
+ * pair, choose and clear up to ten computers. FKeys with Q or W chooses USB or
+ * Bluetooth when both are connected. The right lower thumb key second from
+ * the outside shows the halves' batteries.
+ *
+ * DEMO: ZMK Studio changes the keymap on the keyboard, without a build. The
+ * left lower outer thumb key does nothing, so that you can bind it there.
+ * Unlock Studio with FKeys and O. https://zmk.studio
+ */
+
+/*
+ * LIGHTING
+ *
+ * The key right of G shows the next look, and the right upper outer thumb key
+ * turns the lighting on and off. Hold FKeys, the left upper thumb key second
+ * from the outside, and press ; for dimmer or ' for brighter, in 12 steps
+ * from 4 to 255, or / for the next look. The Neuron remembers the look and the
+ * brightness.
+ *
+ * DEMO: the three blocks below set the colours. After an edit, build and
+ * update the Neuron: run defy-installer update, or copy neuron-hybrid.uf2
+ * onto the DEFY drive. The halves need nothing.
+ *
+ * Colours, at full strength; the brightness scales them:
+ *
+ *    DEFY_OFF  DEFY_WHITE  DEFY_WARM_WHITE  DEFY_RED  DEFY_ORANGE  DEFY_YELLOW
+ *    DEFY_GREEN  DEFY_CYAN  DEFY_BLUE  DEFY_PURPLE  DEFY_PINK
+ *    DEFY_RGB(255, 120, 0)    any other colour: red, green and blue, 0 to 255
+ *    0xFF7800                 the same colour as a hex number
+ *
+ * Every LED has a white LED beside its red, green and blue ones. The part of a
+ * colour common to all three lights the white one, so DEFY_WHITE lights the
+ * white LEDs alone.
+ *
+ * Which colours show: the highest layer that is on and has colours in block 2
+ * or 3 decides. Its single-key colours from block 3 go over its keys colour
+ * from block 2. With no such layer on, the look shows. The lighting key turns
+ * everything off.
+ *
+ * 1. Looks: a colour for the keys and one for the underglow. The lighting
+ *    starts with the first look, and the next-look keys step through the
+ *    rest. A colour left out is off. Without looks here the Neuron has four:
+ *    white keys, warm white keys, white keys and underglow, and white
+ *    underglow alone. To use your own, remove the // marks:
+ */
+// &defy_lighting {
+//     brightness = <24>;                       /* at first, 1 to 255 */
+//     plain { keys = <DEFY_WHITE>; };
+//     warm { keys = <DEFY_WARM_WHITE>; underglow = <DEFY_WARM_WHITE>; };
+//     night { underglow = <DEFY_PURPLE>; };
+// };
+
+/*
+ * 2. Layer colours: a layer shows its own key and underglow colours while it
+ *    is on. A colour left out comes from the look. Here Navigation, FKeys and
+ *    Mouse turn their keys off, so that only the keys block 3 colours light,
+ *    and each has an underglow colour of its own.
+ */
+&defy_layer_lighting {
+    navigation { layer = <NAV>; keys = <DEFY_OFF>; underglow = <DEFY_GREEN>; };
+    fkeys { layer = <FKEYS>; keys = <DEFY_OFF>; underglow = <DEFY_PURPLE>; };
+    mouse { layer = <MOUSE>; keys = <DEFY_OFF>; underglow = <DEFY_BLUE>; };
+};
+
+/*
+ * 3. Key colours: single keys of a layer in a colour of their own, over the
+ *    layer's key colour. Up to 16 groups; a key in two groups takes the later
+ *    one's colour.
+ *
+ *    key-positions numbers the keys as in the first grid: the left half, then
+ *    the right, with the thumb keys in the last two rows. The second grid
+ *    shows the same keys on the Base layer, where LED is the next look, Cpy
+ *    the copy key, FK holds FKeys, Nav is Navigation for one key, Mse holds
+ *    Mouse, C/B is Ctrl or Backspace, A/E Alt or Enter, C/E Ctrl or Enter,
+ *    AGr right Alt, Lgt the lighting key, Mnu the menu key, Bat the battery
+ *    display, BT the profile chooser and Stu the free key, for ZMK Studio.
+ *
+ *      0   1   2   3   4   5   6      7   8   9  10  11  12  13
+ *     14  15  16  17  18  19  20     21  22  23  24  25  26  27
+ *     28  29  30  31  32  33  34     35  36  37  38  39  40  41
+ *     42  43  44  45  46  47             48  49  50  51  52  53
+ *                 54  55  56  57     58  59  60  61
+ *                 62  63  64  65     66  67  68  69
+ *
+ *    Esc   1   2   3   4   5   -      =   6   7   8   9   0 Bks
+ *    Tab   Q   W   E   R   T   [      ]   Y   U   I   O   P Del
+ *    Cap   A   S   D   F   G LED      \   H   J   K   L   ;   '
+ *    Sft   Z   X   C   V   B              N   M   ,   .   / Sft
+ *                Cpy  FK Spc C/B    Nav Spc AGr Lgt
+ *                Stu Mse Gui A/E    C/E Mnu Bat  BT
+ */
+&defy_key_lighting {
+    nav_keys {
+        layer = <NAV>;
+        key-positions = <16 17 18 19 29 30 31 32 33>;
+        colour = <DEFY_YELLOW>;
+    };
+    nav_digits {
+        layer = <NAV>;
+        key-positions = <23 24 25 37 38 39 49 50 51 59>;
+        colour = <DEFY_GREEN>;
+    };
+    nav_operators {
+        layer = <NAV>;
+        key-positions = <8 10 11 12 26 40 48 52>;
+        colour = <DEFY_ORANGE>;
+    };
+    fkeys_numbers {
+        layer = <FKEYS>;
+        key-positions = <0 1 2 3 4 5 6 7 8 9 10 11 12>;
+        colour = <DEFY_WHITE>;
+    };
+    fkeys_media {
+        layer = <FKEYS>;
+        key-positions = <17 18 19 30 31 32 33 47>;
+        colour = <DEFY_CYAN>;
+    };
+    fkeys_system {
+        layer = <FKEYS>;
+        key-positions = <23 37 38 39>;
+        colour = <DEFY_RED>;
+    };
+    fkeys_defy {
+        layer = <FKEYS>;
+        key-positions = <13 15 16 25 40 41 52>;
+        colour = <DEFY_ORANGE>;
+    };
+    mouse_move {
+        layer = <MOUSE>;
+        key-positions = <17 30 31 32>;
+        colour = <DEFY_CYAN>;
+    };
+    mouse_scroll {
+        layer = <MOUSE>;
+        key-positions = <16 18 44 46>;
+        colour = <DEFY_GREEN>;
+    };
+    mouse_buttons {
+        layer = <MOUSE>;
+        key-positions = <19 29 33>;
+        colour = <DEFY_RED>;
+    };
+};
+
+/*
+ * The layers. Navigation: arrows on E, S, D and F, Home and End on W and R,
+ * Page Up and Down on T and G, Print Screen on A, and a numpad on the right
+ * with 0 on the right Space. FKeys: grave and F1 to F12 on the number row;
+ * media keys on the left; display brightness, sleep and power off on U, J, K
+ * and L; and this port's controls: the DEFY drive on Backspace, USB and
+ * Bluetooth output on Q and W, Studio's unlock on O, and the lighting on ;, '
+ * and /. Sleep and power off use the consumer keys, which some computers
+ * ignore.
+ */
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        layer_0 {
+            display-name = "Base";
+            bindings = <
+                &kp ESC   &kp N1       &kp N2         &kp N3         &kp N4          &kp N5       &kp MINUS                            &kp EQUAL     &kp N6         &kp N7        &kp N8                              &kp N9          &kp N0                              &kp BSPC
+                &kp TAB   &kp Q        &kp W          &kp E          &kp R           &kp T        &kp LBKT                             &kp RBKT      &kp Y          &kp U         &kp I                               &kp O           &kp P                               &kp DEL
+                &kp CAPS  &kp A        &kp S          &kp D          &kp F           &kp G        &defy_lighting DEFY_LIGHTING_NEXT    &kp BSLH      &kp H          &kp J         &kp K                               &kp L           &kp SEMI                            &kp SQT
+                &kp LSHFT &kp Z        &kp X          &kp C          &kp V           &kp B                                                           &kp N          &kp M         &kp COMMA                           &kp DOT         &kp FSLH                            &kp RSHFT
+
+                                                      &copy_paste    &mo FKEYS       &kp SPACE    &mt LCTRL BSPC                       &sl NAV       &kp SPACE      &kp RALT      &defy_lighting DEFY_LIGHTING_TOGGLE
+                                                      &none          &mo MOUSE       &kp LGUI     &mt LALT RET                         &mt LCTRL RET &kp K_APP      &defy_battery &defy_profiles
+            >;
+        };
+
+        layer_1 {
+            display-name = "Navigation";
+            bindings = <
+                &kp ESC   &none        &none          &none          &none           &none        &none                                &none         &kp KP_NUMLOCK &none         &kp KP_DIVIDE                       &kp KP_MULTIPLY &kp EQUAL                           &kp BSPC
+                &kp TAB   &none        &kp HOME       &kp UP         &kp END         &kp PG_UP    &none                                &none         &none          &kp KP_N7     &kp KP_N8                           &kp KP_N9       &kp KP_MINUS                        &none
+                &none     &kp PSCRN    &kp LEFT       &kp DOWN       &kp RIGHT       &kp PG_DN    &none                                &none         &none          &kp KP_N4     &kp KP_N5                           &kp KP_N6       &kp KP_PLUS                         &none
+                &kp LSHFT &none        &none          &none          &none           &none                                                           &kp KP_DOT     &kp KP_N1     &kp KP_N2                           &kp KP_N3       &kp KP_ENTER                        &none
+
+                                                      &none          &none           &trans       &trans                               &trans        &kp KP_N0      &none         &none
+                                                      &none          &none           &trans       &trans                               &none         &none          &none         &none
+            >;
+        };
+
+        layer_2 {
+            display-name = "FKeys";
+            bindings = <
+                &kp GRAVE &kp F1       &kp F2         &kp F3         &kp F4          &kp F5       &kp F6                               &kp F7        &kp F8         &kp F9        &kp F10                             &kp F11         &kp F12                             &defy_drive
+                &none     &out OUT_USB &out OUT_BLE   &kp C_PREV     &kp C_NEXT      &kp C_VOL_UP &none                                &none         &none          &kp C_BRI_UP  &none                               &studio_unlock  &trans                              &none
+                &none     &none        &kp C_SHUFFLE  &kp C_STOP     &kp C_PP        &kp C_VOL_DN &none                                &none         &none          &kp C_BRI_DN  &kp C_SLEEP                         &kp C_POWER     &defy_lighting DEFY_LIGHTING_DIMMER &defy_lighting DEFY_LIGHTING_BRIGHTER
+                &none     &none        &none          &none          &none           &kp C_MUTE                                                      &none          &none         &none                               &none           &defy_lighting DEFY_LIGHTING_NEXT   &none
+
+                                                      &none          &trans          &none        &none                                &none         &none          &none         &none
+                                                      &none          &none           &none        &none                                &none         &none          &none         &none
+            >;
+        };
+
+        layer_3 {
+            display-name = "Mouse";
+            bindings = <
+                &trans    &trans       &trans         &trans         &trans          &trans       &trans                               &trans        &trans         &trans        &trans                              &trans          &trans                              &trans
+                &trans    &trans       &msc SCRL_UP   &mmv MOVE_UP   &msc SCRL_DOWN  &mkp RCLK    &trans                               &trans        &trans         &trans        &trans                              &trans          &trans                              &trans
+                &trans    &mkp MCLK    &mmv MOVE_LEFT &mmv MOVE_DOWN &mmv MOVE_RIGHT &mkp LCLK    &trans                               &trans        &trans         &trans        &trans                              &trans          &trans                              &trans
+                &trans    &trans       &msc SCRL_LEFT &trans         &msc SCRL_RIGHT &trans                                                          &trans         &trans        &trans                              &trans          &trans                              &trans
+
+                                                      &trans         &trans          &trans       &trans                               &trans        &trans         &trans        &trans
+                                                      &trans         &trans          &trans       &trans                               &trans        &trans         &trans        &trans
+            >;
+        };
+
+        layer_4 { status = "reserved"; };
+        layer_5 { status = "reserved"; };
+        layer_6 { status = "reserved"; };
+        layer_7 { status = "reserved"; };
+        layer_8 { status = "reserved"; };
+        layer_9 { status = "reserved"; };
+    };
+};

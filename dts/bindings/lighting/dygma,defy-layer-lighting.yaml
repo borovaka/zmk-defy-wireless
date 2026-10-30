@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Colours for keymap layers. Each child gives a layer the colours it shows
+  instead of the look's, at full strength and scaled by the brightness. The
+  highest active layer with a child decides; a colour it leaves out comes
+  from the look. dt-bindings/dygma/defy_lighting.h has the colours, and
+  docs/lighting.md describes them.
+
+compatible: "dygma,defy-layer-lighting"
+
+child-binding:
+  description: A layer's colours.
+  properties:
+    layer:
+      type: int
+      required: true
+      description: The layer, numbered as &mo and &tog number it.
+    keys:
+      type: int
+      description: The per-key LEDs' colour as 0xRRGGBB; 0 leaves them dark.
+    underglow:
+      type: int
+      description: The underglow's colour as 0xRRGGBB; 0 leaves it dark.

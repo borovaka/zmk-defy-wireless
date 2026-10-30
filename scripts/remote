@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Run a command of this repository on a Linux machine with Docker, such as
+#
+#   DEFY_REMOTE=user@host scripts/remote scripts/test drivers
+#   DEFY_REMOTE=user@host scripts/remote scripts/build neuron-hybrid
+#
+# The working tree, uncommitted changes and firmware/ included, is copied first
+# to ~/$DEFY_REMOTE_DIR/<this repository's folder name> on that machine
+# (default DEFY_REMOTE_DIR: src). The west workspace sits next to it there, as
+# here: set it up once with `scripts/remote scripts/setup`, after pulling the
+# build image there. After the command, firmware/ comes back as the command
+# left it, deletions included, so that manifest.json describes the images
+# beside it. Flashing stays here, where the keyboard is.
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+remote="${DEFY_REMOTE:?set DEFY_REMOTE to user@host}"
+dir="${DEFY_REMOTE_DIR:-src}/$(basename "$repo")"
+# The same, quoted for the remote shell, which reads the commands below.
+qdir="$(printf '%q' "$dir")"
+if [ $# -eq 0 ]; then
+    echo "usage: DEFY_REMOTE=user@host scripts/remote <command> [arguments]" >&2
+    exit 2
+fi
+
+# One SSH connection serves the syncs and the command. ssh expands the ~
+# itself, so the options hold no spaces and pass to rsync's -e as one string.
+ssh_opts=(-o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60
+          -o 'ControlPath=~/.ssh/defy-remote-%C')
+rsync_ssh=(-e "ssh ${ssh_opts[*]}")
+
+# shellcheck disable=SC2029  # qdir is quoted for the remote shell
+ssh "${ssh_opts[@]}" "$remote" "mkdir -p $qdir"
+
+# macOS ships openrsync, so only the common options are used.
+rsync -a --delete "${rsync_ssh[@]}" --exclude '__pycache__/' "$repo/" "$remote:$dir/"
+
+command="$(printf '%q ' "$@")"
+status=0
+# shellcheck disable=SC2029  # the command is quoted here on purpose
+ssh "${ssh_opts[@]}" "$remote" "cd $qdir || exit; { $command; }; status=\$?;
+    mkdir -p firmware; exit \$status" || status=$?
+
+# -i lists what changed: >f for a file copied back, *deleting for one removed.
+rsync -a --delete -i "${rsync_ssh[@]}" "$remote:$dir/firmware/" "$repo/firmware/"
+exit "$status"

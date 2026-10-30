@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+
+description: Matrix power test
+compatible: "dygma,matrix-power-test"
+include: base.yaml
+properties:
+  row-gpios:
+    type: phandle-array
+    required: true
+  col-gpios:
+    type: phandle-array
+    required: true

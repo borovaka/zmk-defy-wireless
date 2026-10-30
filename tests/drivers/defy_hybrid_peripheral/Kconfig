@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+
+mainmenu "Defy hybrid peripheral tests"
+
+config ZMK_SPLIT
+    bool
+    default y
+
+config ZMK_SPLIT_ROLE_CENTRAL
+    bool
+    default n
+
+config ZMK_SPLIT_BLE
+    bool
+    default y
+
+config ZMK_SPLIT_BLE_PRIORITY
+    int
+    default 20
+
+config ZMK_LOG_LEVEL
+    int
+    default 3
+
+source "Kconfig.zephyr"

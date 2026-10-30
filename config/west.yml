@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+
+# ZMK revision this module is built and tested against. scripts/setup checks
+# out the same revision in ../zmk-workspace, and keymap repositories made from
+# the Defy-Wireless-ZMK template import it from here.
+manifest:
+  remotes:
+    - name: zmkfirmware
+      url-base: https://github.com/zmkfirmware
+  projects:
+    - name: zmk
+      remote: zmkfirmware
+      revision: 4dd95d7840eb3d5a3f59bb29fbf1ab054715ef85
+      import: app/west.yml

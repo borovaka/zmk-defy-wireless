@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+
+description: Fake LED strip that records the frames it is sent, for tests.
+
+compatible: "vnd,led-strip"
+
+properties:
+  chain-length:
+    type: int
+    required: true

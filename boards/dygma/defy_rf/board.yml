@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+
+board:
+  name: defy_rf
+  full_name: Dygma Defy RF board (nRF52820)
+  vendor: dygma
+  socs:
+    - name: nrf52820

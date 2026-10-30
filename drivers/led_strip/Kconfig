@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+
+config IS31FL3743B
+    bool "ISSI IS31FL3743B LED matrix driver"
+    default y
+    depends on DT_HAS_ISSI_IS31FL3743B_ENABLED
+    depends on LED_STRIP
+    select SPI
+    help
+      LED strip driver for the IS31FL3743B on SPI, used for the Defy's
+      per-key LEDs.
+
+config DEFY_LEDS
+    bool "Dygma Defy lights as one LED strip"
+    default y
+    depends on DT_HAS_DYGMA_DEFY_LEDS_ENABLED
+    depends on LED_STRIP
+    help
+      Joins the Defy's per-key LEDs and underglow into one strip, and
+      switches the underglow's supply.
+
+config DEFY_WS2812_PIO
+    bool "WS2812 on the RP2040's PIO, Zephyr's driver with four fixes"
+    default y
+    depends on DT_HAS_DYGMA_WS2812_RPI_PICO_PIO_ENABLED
+    depends on LED_STRIP
+    select PICOSDK_USE_PIO
+    help
+      A copy of Zephyr 4.1's WS2812 PIO driver for the Defy's underglow. It
+      packs four-channel pixels from the top byte, runs the PIO program at
+      whatever offset it was loaded, keeps the clock divider's fraction and
+      checks that the program fits. The driver's source describes each fix.

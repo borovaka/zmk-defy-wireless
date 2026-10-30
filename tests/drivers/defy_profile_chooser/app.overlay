@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: MIT */
+
+/* The chooser's keys come from its behavior node, with the binding's defaults. */
+/ {
+    behaviors {
+        defy_profiles: profile_chooser {
+            compatible = "dygma,defy-profile-chooser";
+            #binding-cells = <0>;
+        };
+    };
+};

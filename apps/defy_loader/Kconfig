@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+
+mainmenu "Defy Neuron UF2 loader"
+
+menu "Defy UF2 loader"
+
+# Placeholder IDs, Zephyr's for testing. They differ from ZMK's 1d50:615e
+# because Windows binds drivers by these IDs.
+config DEFY_LOADER_USB_VID
+    hex "USB vendor ID of the drive"
+    default 0x2fe3
+
+config DEFY_LOADER_USB_PID
+    hex "USB product ID of the drive"
+    default 0x0100
+
+config DEFY_LOADER_USB_MANUFACTURER
+    string "USB manufacturer string of the drive"
+    default "zmk-defy-wireless"
+
+config DEFY_LOADER_USB_PRODUCT
+    string "USB product string of the drive"
+    default "Defy UF2 loader"
+
+endmenu
+
+source "Kconfig.zephyr"

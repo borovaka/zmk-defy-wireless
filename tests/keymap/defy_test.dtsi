@@ -1,0 +1,24 @@
+/*
+ * Runs the Defy's keymap and transform on ZMK's native_sim test board. The
+ * mock kscan reports matrix positions, so events use the same (row, column)
+ * pairs as RC() in defy-transform.dtsi. Right-half columns are 8-15, after the
+ * col-offset that the right half's board applies.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <dt-bindings/zmk/kscan_mock.h>
+
+#include "../../boards/dygma/defy/defy-transform.dtsi"
+#include "../../config/defy_neuron.keymap"
+
+/ {
+    chosen {
+        zmk,matrix-transform = &default_transform;
+    };
+};
+
+&kscan {
+    rows = <5>;
+    columns = <16>;
+};

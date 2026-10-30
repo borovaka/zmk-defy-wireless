@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Defy test PWM controller with pin control, for the UF2 loader's LED suite,
+  which takes the LED pins from the PWM's pin configuration
+compatible: "dygma,loader-test-pwm"
+include: [pwm-controller.yaml, base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  "#pwm-cells":
+    const: 3
+
+pwm-cells:
+  - channel
+  - period
+  - flags

@@ -1,0 +1,19 @@
+/*
+ * The Neuron's half updater: a USB serial port of its own, beside the one the
+ * studio-rpc-usb-uart or zmk-usb-logging snippet adds. The cables, the I2C bus
+ * and the halves' RUN lines it uses are in the board's devicetree.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    chosen {
+        dygma,half-updater-uart = &defy_updater_uart;
+    };
+};
+
+&zephyr_udc0 {
+    defy_updater_uart: defy_updater_uart {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

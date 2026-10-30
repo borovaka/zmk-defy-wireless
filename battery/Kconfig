@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_CONTROL
+    bool
+    depends on DEFY_HYBRID
+    help
+      The Neuron's control channel to each half, as dygma/defy_control.h
+      describes it: the GATT service on each half, its client on the
+      Neuron, and the Neuron's commands over the cable. DEFY_BATTERY,
+      DEFY_LIGHTING and DEFY_HALF_VERSION select it for what they send
+      over it.
+
+config DEFY_BATTERY
+    bool "Defy battery telemetry"
+    default y
+    depends on DEFY_HYBRID && BT
+    select DEFY_CONTROL
+    select DEFY_BATTERY_HCI if DEFY_BT_HCI_SPI
+    help
+      Each half's battery level and charger state, which its radio
+      measures: the battery display's cells and the low-battery warning on the half's
+      keys, and on the Neuron the lower of the halves' levels through the
+      Bluetooth Battery Service. See docs/battery.md.
+
+if DEFY_BATTERY
+
+module = DEFY_BATTERY
+module-str = Defy battery
+source "subsys/logging/Kconfig.template.log_config"
+
+endif
+
+config DEFY_BATTERY_HCI
+    bool
+    depends on DEFY_BT_HCI_SPI
+    select BT_HCI_VS_EVT_USER
+    help
+      The half's decoder of the radio's battery events,
+      drivers/bluetooth/defy_battery_hci.c.
+
+config DEFY_HALF_VERSION
+    bool "Defy halves' version report"
+    default y
+    depends on DEFY_HYBRID && BT
+    select DEFY_CONTROL
+    select CRC
+    help
+      Each half reports its side, its program's CRC32 and seal version and
+      the module version it was built from, in a third characteristic of
+      its control service and in 'DV' cable frames. The Neuron keeps the
+      latest report from each half for the half updater's HALF VERSIONS.
+      See docs/versions.md.

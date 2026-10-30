@@ -1,0 +1,61 @@
+/*
+ * The Neuron's flash layout, shared by the plain target and the zmk variant so
+ * that the UF2 loader and ZMK agree on where ZMK lives. ZMK links into
+ * code_partition; the loader, through its app.overlay, into loader_partition.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        mbr_partition: partition@0 {
+            reg = <0x00000000 0x00001000>;
+            read-only;
+        };
+
+        /*
+         * The UF2 loader, in place of S140: n2_bootloader starts whatever the
+         * vector table at 0x1000 names and never checks for a SoftDevice. Only
+         * the installer writes here, through n2_bootloader.
+         */
+        loader_partition: partition@1000 {
+            reg = <0x00001000 0x0000c000>;
+            read-only;
+        };
+
+        /*
+         * Code and settings stay below 0x72000, the end of what the installer
+         * erases before writing the Neuron. Dygma's settings pages above it
+         * are left alone, so they survive a round trip.
+         */
+        code_partition: partition@d000 {
+            reg = <0x0000d000 0x0005f000>;
+        };
+
+        storage_partition: partition@6c000 {
+            reg = <0x0006c000 0x00006000>;
+        };
+
+        dygma_settings_partition: partition@72000 {
+            reg = <0x00072000 0x00005000>;
+            read-only;
+        };
+
+        /*
+         * Dygma's n2_bootloader at 0x77000..0x7DF54, and the MBR parameter
+         * page at 0x7E000.
+         */
+        boot_partition: partition@77000 {
+            reg = <0x00077000 0x00008000>;
+            read-only;
+        };
+
+        boot_request_partition: partition@7f000 {
+            reg = <0x0007f000 0x00001000>;
+        };
+    };
+};

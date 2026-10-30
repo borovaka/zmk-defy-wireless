@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+
+file_format: "1"
+id: defy_neuron
+name: Dygma Neuron (Defy dongle)
+type: board
+url: https://dygma.com/pages/defy
+arch: arm
+features:
+  - studio
+outputs:
+  - usb
+  - ble

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+
+DT_CHOSEN_DEFY_HALF_UPDATER_UART := dygma,half-updater-uart
+
+config DEFY_HALF_UPDATER
+    bool "Defy half firmware updater"
+    default y
+    depends on DEFY_HYBRID && ZMK_SPLIT_ROLE_CENTRAL && SOC_NRF52833
+    depends on ZMK_USB && USB_CDC_ACM && UART_LINE_CTRL
+    depends on $(dt_chosen_enabled,$(DT_CHOSEN_DEFY_HALF_UPDATER_UART))
+    depends on DT_HAS_DYGMA_DEFY_NEURON_CABLES_ENABLED
+    select I2C
+    select CRC
+    select RING_BUFFER
+    select DEFY_UPDATE_GUARD
+    help
+      Writes the halves' firmware over the cables, through their factory I2C
+      bootloaders, and answers the installer's status requests, on a USB
+      serial port of its own. The defy-half-updater snippet adds that port
+      and the options it needs. See docs/half-updater.md.

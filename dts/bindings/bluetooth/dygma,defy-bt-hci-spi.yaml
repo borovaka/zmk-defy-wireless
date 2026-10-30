@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  The nRF52820 Bluetooth controller on a Defy half's RF board, over SPI. Like
+  zephyr,bt-hci-spi, without a reset line: the driver brings the controller to
+  a fresh boot over SPI. See drivers/bluetooth/defy_hci_spi.c.
+
+compatible: "dygma,defy-bt-hci-spi"
+
+include: [spi-device.yaml, bt-hci.yaml]
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+    description: Data ready from the controller, high while it has a message.
+
+  controller-data-delay-us:
+    type: int
+    default: 20
+    description: |
+      Delay between a header and the message or packet after it, for the
+      controller to arm the transfer. As in zephyr,bt-hci-spi.
+
+  bt-hci-name:
+    default: "SPI"
+
+  bt-hci-bus:
+    default: "spi"

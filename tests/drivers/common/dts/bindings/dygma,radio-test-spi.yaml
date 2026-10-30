@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+description: Defy radio test SPI controller, faked by the suites that use it
+compatible: "dygma,radio-test-spi"
+include: spi-controller.yaml

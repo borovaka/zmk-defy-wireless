@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT
+
+# The plain target, defy_neuron/nrf52833, is the UF2 loader's. The boot mode
+# carries &defy_drive's request to the loader in GPREGRET.
+config BOARD_DEFY_NEURON
+    select SOC_NRF52833_QIAA
+    select ZMK_BOARD_COMPAT if BOARD_DEFY_NEURON_NRF52833_ZMK
+    imply RETAINED_MEM if BOARD_DEFY_NEURON_NRF52833_ZMK
+    imply RETENTION if BOARD_DEFY_NEURON_NRF52833_ZMK
+    imply RETENTION_BOOT_MODE if BOARD_DEFY_NEURON_NRF52833_ZMK

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  Colours for single keys on a keymap layer. Each child gives some keys of one
+  layer a colour of its own, at full strength and scaled by the brightness,
+  while that layer decides the colours: the highest active layer with colours
+  here or in &defy_layer_lighting. A key in two children takes the later
+  one's colour. At most 16 children. dt-bindings/dygma/defy_lighting.h has the
+  colours, and docs/lighting.md describes them.
+
+compatible: "dygma,defy-key-lighting"
+
+child-binding:
+  description: Keys of one layer in one colour.
+  properties:
+    layer:
+      type: int
+      required: true
+      description: The layer, numbered as &mo and &tog number it.
+    key-positions:
+      type: array
+      required: true
+      description: The keys, numbered as ZMK's combos number them, 0 to 69.
+    colour:
+      type: int
+      required: true
+      description: The keys' colour as 0xRRGGBB; 0 leaves them dark.

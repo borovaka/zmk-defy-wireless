@@ -1,0 +1,32 @@
+/*
+ * The Defy's keymap and physical layout on ZMK's native_sim test board, with
+ * Studio's RPC on the second simulated UART. rpc_test.py talks to it there.
+ *
+ * Unlike tests/keymap, this chooses the physical layout rather than the
+ * matrix transform: with a chosen transform, ZMK ignores physical layouts.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <dt-bindings/zmk/kscan_mock.h>
+
+#include "../../boards/dygma/defy/defy-layouts.dtsi"
+#include "../../boards/dygma/defy/defy.keymap"
+
+/ {
+    chosen {
+        zmk,physical-layout = &defy_layout;
+        zmk,studio-rpc-uart = &uart1;
+    };
+};
+
+/*
+ * Keep running until the client stops the simulation. The mock needs at least
+ * one event: (3,6) is not in the transform, so ZMK ignores it.
+ */
+&kscan {
+    rows = <5>;
+    columns = <16>;
+    events = <ZMK_MOCK_PRESS(3,6,10)>;
+    /delete-property/ exit-after;
+};

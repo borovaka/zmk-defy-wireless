@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_FATAL_LEDS
+    bool "Show a half's fatal errors on its per-key LEDs"
+    default y
+    depends on DEFY_RP2040_FACTORY_HANDOFF
+    help
+      A Zephyr fatal error flashes the per-key LEDs, written through the
+      RP2040's registers alone, in a pattern that tells its kind.
+
+config DEFY_FATAL_RECOVERY
+    bool "Restart a half after a fatal error and contain repeated faults"
+    depends on DEFY_FATAL_LEDS
+    default y
+    help
+      A fatal error shows its pattern for 0.5 s, and the watchdog restarts
+      the half 2 s after the fault. The count of quick faults lives in
+      watchdog scratch registers 0 and 1 and clears after 60 s of uptime. On
+      the third quick fault the half starts with its LEDs off and waits in
+      DORMANT until a key is pressed, which starts it afresh. Switching it
+      off and on does the same. The -hybrid-diag builds turn this off, so
+      that the error stays on the LEDs.
+
+config DEFY_KEY_TRACE
+    bool "Trace key events on the Neuron"
+    default y
+    depends on DEFY_HALF_UPDATER
+    help
+      Keeps the last 64 steps from a half's frame to a ZMK keycode in RAM:
+      the snapshots queued by the hybrid central, the cable frames behind
+      them, the position events it publishes and the keycode events ZMK
+      raises, each with a microsecond time. The half updater's opcode 11
+      reads and clears it; see docs/split-diagnostics.md.
+      For finding where keys change order. It takes 768 bytes of RAM.

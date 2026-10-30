@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  The Defy's lighting controls. The parameter is a command from
+  dt-bindings/dygma/defy_lighting.h. Each child is a look: a key colour and an
+  underglow colour at full strength, scaled by the brightness. The first look
+  is the initial one, and DEFY_LIGHTING_NEXT steps through them. Without
+  children the Neuron uses its four built-in looks. See docs/lighting.md.
+
+compatible: "dygma,defy-lighting"
+
+include: one_param.yaml
+
+properties:
+  brightness:
+    type: int
+    default: 24
+    description: |
+      Initial brightness, 1 to 255. DEFY_LIGHTING_BRIGHTER and
+      DEFY_LIGHTING_DIMMER step it through 4, 8, 12, 16, 24, 32, 48, 64, 96,
+      128, 192 and 255.
+
+child-binding:
+  description: A look.
+  properties:
+    keys:
+      type: int
+      default: 0
+      description: The per-key LEDs' colour as 0xRRGGBB; 0, the default, leaves them dark.
+    underglow:
+      type: int
+      default: 0
+      description: The underglow's colour as 0xRRGGBB; 0, the default, leaves it dark.

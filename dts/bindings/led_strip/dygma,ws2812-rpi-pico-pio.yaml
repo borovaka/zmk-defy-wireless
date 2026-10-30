@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+
+description: |
+  WS2812 strips on the RP2040's PIO. The same as Zephyr's
+  worldsemi,ws2812-rpi_pico-pio, for a copy of Zephyr 4.1's driver with four
+  fixes: four-channel pixels shifted by one byte, a program that runs only at
+  PIO offset 0, a clock divider without its fraction and an unchecked
+  pio_add_program(). See drivers/led_strip/ws2812_rpi_pico_pio.c.
+
+compatible: "dygma,ws2812-rpi-pico-pio"
+
+include: pinctrl-device.yaml
+
+properties:
+  bit-waveform:
+    type: array
+    description: |
+      T0, T1 and T2 as parts of one bit period, as in Zephyr's
+      worldsemi,ws2812-rpi_pico-pio. A 0 is high for T0 and a 1 for T0+T1.
+
+child-binding:
+  description: |
+    A strip on this PIO. Up to 4 per PIO node.
+
+  include: ws2812-gpio.yaml
+
+  properties:
+    gpios:
+      description: |
+        Only the pin number is used. The pin is set up by the parent node's
+        pinctrl.
+
+    frequency:
+      type: int
+      description: |
+        Bits per second. 800000 for WS2812 and SK6812.

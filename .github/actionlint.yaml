@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+#
+# actionlint 1.7.12 predates GitHub's Ubuntu 26.04 runners, generally
+# available since 2026-09-17, so it does not know the label. Remove this once
+# actionlint lists it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

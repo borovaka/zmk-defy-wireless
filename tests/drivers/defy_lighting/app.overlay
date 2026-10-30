@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: MIT */
+
+/*
+ * The module's behaviors, with two looks at full brightness, so that colours
+ * reach the state unscaled, layer colours for two of five layers, and key
+ * colours on the gaming layer and on the fifth, which has no layer colours.
+ * The board's transform maps the key positions.
+ */
+#include <behaviors/defy.dtsi>
+#include <dt-bindings/dygma/defy_lighting.h>
+#include <dt-bindings/zmk/matrix_transform.h>
+
+#include "../../../boards/dygma/defy/defy-transform.dtsi"
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+        base { bindings = <&defy_lighting DEFY_LIGHTING_TOGGLE>; };
+        gaming { bindings = <&defy_lighting DEFY_LIGHTING_TOGGLE>; };
+        fn { bindings = <&defy_lighting DEFY_LIGHTING_TOGGLE>; };
+        nav { bindings = <&defy_lighting DEFY_LIGHTING_TOGGLE>; };
+        extra { bindings = <&defy_lighting DEFY_LIGHTING_TOGGLE>; };
+    };
+};
+
+&defy_lighting {
+    brightness = <255>;
+    first { keys = <0x102030>; underglow = <0x040506>; };
+    second { keys = <DEFY_WHITE>; };
+};
+
+&defy_layer_lighting {
+    gaming { layer = <1>; keys = <DEFY_RED>; underglow = <DEFY_OFF>; };
+    fn { layer = <2>; underglow = <DEFY_BLUE>; };
+};
+
+&defy_key_lighting {
+    wasd { layer = <1>; key-positions = <16 29 30 31>; colour = <DEFY_GREEN>; };
+    numbers { layer = <1>; key-positions = <1 2 3 4 5 30>; colour = <DEFY_BLUE>; };
+    seven { layer = <4>; key-positions = <8>; colour = <DEFY_WHITE>; };
+};

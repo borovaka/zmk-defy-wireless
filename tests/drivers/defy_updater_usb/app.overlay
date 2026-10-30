@@ -1,0 +1,58 @@
+/* SPDX-License-Identifier: MIT */
+
+&zephyr_udc0 {
+    updater_test_cdc: updater-cdc-acm {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+
+/ {
+    chosen {
+        dygma,half-updater-uart = &updater_test_cdc;
+    };
+};
+
+/* The Neuron's cables as on the board: left RUN line on P0.29, right on P0.28. */
+/ {
+    defy_cables: cables {
+        compatible = "dygma,defy-neuron-cables";
+        spi-ports = <&spi0 &spi0>;
+        run-gpios = <&gpio0 29 0>, <&gpio0 28 0>;
+        i2c-bus = <&i2c0>;
+    };
+};
+
+/* A keymap of three layers over twelve positions, which sizes CLEAR KEYMAP CHANGES's bitmap. */
+/ {
+    chosen {
+        zmk,matrix-transform = &updater_test_transform;
+    };
+
+    updater_test_transparent: updater-test-transparent {
+        compatible = "zmk,behavior-transparent";
+        #binding-cells = <0>;
+    };
+
+    updater_test_transform: updater-test-transform {
+        compatible = "zmk,matrix-transform";
+        rows = <1>;
+        columns = <12>;
+        map = <0 1 2 3 4 5 6 7 8 9 10 11>;
+    };
+
+    keymap {
+        compatible = "zmk,keymap";
+
+        base {
+            bindings = <&updater_test_transparent>;
+        };
+
+        lower {
+            bindings = <&updater_test_transparent>;
+        };
+
+        raise {
+            bindings = <&updater_test_transparent>;
+        };
+    };
+};

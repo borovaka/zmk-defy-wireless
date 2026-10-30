@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: MIT */
+
+/* The Neuron's cables as on the board: left RUN line on P0.29, right on P0.28. */
+/ {
+    defy_cables: cables {
+        compatible = "dygma,defy-neuron-cables";
+        spi-ports = <&spi0 &spi0>;
+        run-gpios = <&gpio0 29 0>, <&gpio0 28 0>;
+        i2c-bus = <&i2c0>;
+    };
+};

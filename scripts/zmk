@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Run a command in ZMK's dev container.
+#
+# The folder above this repository is mounted at /work, so the container sees
+# the repository at /work/<repo> and the west workspace at /work/zmk-workspace.
+# Build trees go to the zmk-defy-build volume at /build, as builds on the macOS
+# file share produce truncated object files. The command starts in the ZMK
+# checkout.
+#
+# The image is ZMK's, pinned by its digest to the one the builds were checked
+# with; ZMK_IMAGE names another. It is never pulled implicitly: pull the one
+# below yourself, adding --platform linux/amd64 for the tests.
+set -euo pipefail
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+project="$(dirname "$repo")"
+image="${ZMK_IMAGE:-zmkfirmware/zmk-dev-arm@sha256:77b62cbc6c62ca0026ed9eb511dd7fc2a13692d1b9ddbaf92bca510612390db8}"
+
+# Zephyr compiles through ccache when it finds it, as in this image. Its cache
+# lives on the build volume, so that it outlasts the container. ccache refuses
+# a compile whose -specs file it cannot find from the build directory, and the
+# ARM builds pass -specs=picolibc.specs, which GCC finds in the SDK; the SDK is
+# part of the pinned image, so ccache can leave that option out of its hash.
+args=(--rm --pull never -v "$project:/work" -v zmk-defy-build:/build -w /work/zmk-workspace/zmk
+      -e CCACHE_DIR=/build/ccache -e "CCACHE_IGNOREOPTIONS=-specs=*")
+if [ -t 0 ] && [ -t 1 ]; then
+    args+=(-it)
+fi
+# SELinux, as on Fedora, keeps containers out of the mounted folders. Turn its
+# labels off for this container rather than relabel the files with :z.
+if command -v selinuxenabled > /dev/null && selinuxenabled; then
+    args+=(--security-opt label=disable)
+fi
+if [ -n "${ZMK_PLATFORM:-}" ]; then
+    args+=(--platform "$ZMK_PLATFORM")
+fi
+# Extra docker arguments, split on spaces.
+if [ -n "${ZMK_DOCKER_ARGS:-}" ]; then
+    read -r -a extra <<< "$ZMK_DOCKER_ARGS"
+    args+=("${extra[@]}")
+fi
+
+exec docker run "${args[@]}" "$image" "$@"

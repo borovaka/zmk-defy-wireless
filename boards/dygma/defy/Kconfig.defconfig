@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+
+if BOARD_DEFY_LEFT || BOARD_DEFY_RIGHT
+
+config ZMK_KEYBOARD_NAME
+    default "Defy"
+
+config ZMK_SPLIT
+    default y
+
+endif # BOARD_DEFY_LEFT || BOARD_DEFY_RIGHT

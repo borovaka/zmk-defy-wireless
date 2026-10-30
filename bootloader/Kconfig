@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_NEURON_BOOTLOADER
+    bool "Defy Neuron software bootloader entry"
+    default y
+    depends on $(dt_nodelabel_enabled,boot_request_partition)
+    depends on USB_CDC_ACM && UART_LINE_CTRL
+    depends on FLASH && FLASH_MAP && FLASH_PAGE_LAYOUT
+    select CDC_ACM_DTE_RATE_CALLBACK_SUPPORT
+    select CRC
+    select DEFY_UPDATE_GUARD
+    help
+      Restarts the Neuron into Dygma's n2_bootloader after a 1200-baud
+      touch: the host sets a USB serial port other than the half updater's
+      to 1200 baud and drops DTR. The Neuron first checks the bootloader's
+      CRC32, then writes the bootloader's request page. See
+      docs/software-bootloader.md.
+
+config DEFY_UF2_DRIVE
+    bool "Defy Neuron key for the UF2 loader's drive"
+    default y
+    depends on DT_HAS_DYGMA_DEFY_UF2_DRIVE_ENABLED
+    depends on RETENTION_BOOT_MODE && ZMK_BOOTMODE_TO_MAGIC_VALUE_MAPPER && REBOOT
+    select DEFY_UPDATE_GUARD
+    help
+      &defy_drive restarts the Neuron into the UF2 loader's drive. ZMK's
+      &bootloader would restart the half whose key was pressed. See
+      docs/uf2-loader.md.
+
+config DEFY_LOADER_CONFIRM
+    bool "Confirm ZMK's starts to the UF2 loader"
+    default y
+    depends on $(dt_nodelabel_enabled,loader_partition)
+    help
+      Clears the UF2 loader's count of unconfirmed starts in GPREGRET once
+      ZMK has run for 10 s, and before a 1200-baud entry into
+      n2_bootloader. After three starts in a row without it, the loader
+      shows its drive instead of starting ZMK again. See
+      docs/uf2-loader.md.
+
+config DEFY_NEURON_FATAL_RESET
+    bool "Restart the Neuron after a fatal error"
+    default y
+    depends on $(dt_nodelabel_enabled,loader_partition)
+    depends on REBOOT
+    help
+      Zephyr's default handler halts the Neuron after a fatal error, until
+      it loses power. This one restarts it, through the UF2 loader, which
+      counts the start: a ZMK that fails within 10 s of three starts in a
+      row then ends in the loader's drive.
+
+config DEFY_UPDATE_GUARD
+    bool
+    help
+      Lets one of the half updater, the 1200-baud bootloader entry and
+      &defy_drive hold the Neuron at a time.

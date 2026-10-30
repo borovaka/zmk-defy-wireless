@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+
+description: Restart the Neuron into the UF2 loader's drive
+compatible: "dygma,defy-uf2-drive"
+include: zero_param.yaml

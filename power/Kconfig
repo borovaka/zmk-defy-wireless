@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_HALF_SLEEP
+    bool "Defy half dormant sleep"
+    depends on SOC_RP2040 && DEFY_HYBRID && !ZMK_SPLIT_ROLE_CENTRAL
+    depends on DEFY_BT_PERSISTENT_ID
+    depends on !ZMK_SLEEP && !ZMK_PM_SOFT_OFF
+    select POWEROFF
+    select PM_DEVICE
+    select PM_DEVICE_SYSTEM_MANAGED
+    select ZMK_PM_DEVICE_SUSPEND_RESUME
+    default y
+    help
+      Puts an idle half into the RP2040's DORMANT state, in place of ZMK's
+      own sleep: Bluetooth shut down and the radio powered off, the LED
+      drivers suspended, every clock stopped. A key press restarts the half.
+      A half stays awake while a key is held, its cable link is up, the
+      battery display shows, or its last battery sample reports charging or
+      charge complete. docs/power-and-wake.md has the details.
+
+config DEFY_HALF_SLEEP_TIMEOUT_MS
+    int "Defy half inactivity before dormant sleep (ms)"
+    depends on DEFY_HALF_SLEEP
+    range 1000 86400000
+    default 300000
+    help
+      How long a half goes without a key change before it sleeps, if
+      nothing else keeps it awake.

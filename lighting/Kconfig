@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_LIGHTING
+    bool "Defy half lighting and host feedback"
+    default y
+    depends on DEFY_HYBRID && SETTINGS
+    select DEFY_CONTROL
+    select CRC if ZMK_SPLIT_ROLE_CENTRAL
+    help
+      The halves' lighting and its controls, with the looks and layer
+      colours the keymap sets, the overlay that shows the selected Bluetooth
+      profile and output on the halves' keys, and the Bluetooth profile
+      chooser. See docs/lighting.md.
+
+config DEFY_HALF_LEDS
+    bool "A half's LED interface"
+    default y
+    depends on DT_HAS_DYGMA_DEFY_LEDS_ENABLED
+    select LED_STRIP
+    help
+      Everything a half shows on its LEDs: how far its start-up got, from
+      ZMK running through the radio firmware install to Bluetooth and the
+      link to the Neuron, a report when the radio fails, and the displays
+      the Neuron asks for: the lighting state, the battery display's cells, the
+      host overlay and the profile chooser. The half's own low-battery
+      warning shows there too. See docs/lighting.md. ZMK's RGB underglow
+      must stay off, as it drives the same LEDs.

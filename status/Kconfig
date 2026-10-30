@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_NEURON_STATUS_LED
+    bool "Defy Neuron status LED"
+    default y
+    depends on $(dt_nodelabel_enabled,led_green) && $(dt_nodelabel_enabled,led_red)
+    depends on ZMK_USB
+    select PWM
+    help
+      Lights the Neuron's LED green while a USB host has configured HID and
+      is not suspended, and blinks it amber while the half updater holds
+      the halves. See docs/lighting.md.
+
+config DEFY_NEURON_STATUS_LED_BRIGHTNESS
+    int "Defy Neuron status LED brightness in percent"
+    depends on DEFY_NEURON_STATUS_LED
+    range 1 100
+    default 3
+
+config DEFY_NEURON_DOCK
+    bool "Defy Neuron cable and dock detection"
+    default y
+    depends on ZMK_USB && GPIO
+    depends on DT_HAS_DYGMA_DEFY_NEURON_CABLES_ENABLED
+    help
+      Reads the halves' RUN lines to tell which cables are in and whether
+      the Neuron is docked, on a computer, on a charger or alone. Lighting
+      marks the docked state on the halves, and the half updater reports it.
+      See docs/automatic-transports.md.

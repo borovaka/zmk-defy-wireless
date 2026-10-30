@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: MIT */
+
+/ {
+    chosen {
+        zephyr,bt-hci = &radio;
+    };
+    radio: radio {
+        compatible = "dygma,half-sleep-test-device";
+    };
+    kscan0: matrix {
+        compatible = "dygma,half-sleep-test-device";
+    };
+    defy_leds: leds {
+        compatible = "dygma,half-sleep-test-device";
+    };
+    key_leds: key-leds {
+        compatible = "dygma,half-sleep-test-device";
+    };
+};

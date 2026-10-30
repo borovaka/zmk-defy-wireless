@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: MIT */
+
+/ {
+    chosen {
+        /delete-property/ zephyr,bt-hci;
+    };
+
+    zephyr,user {
+        chip-select-gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
+    };
+
+    test_spi: test-spi {
+        compatible = "dygma,radio-test-spi";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        status = "okay";
+
+        bt-hci@0 {
+            compatible = "zephyr,bt-hci-spi-slave";
+            reg = <0>;
+            irq-gpios = <&gpio0 16 GPIO_ACTIVE_HIGH>;
+        };
+    };
+};
+
+&bt_hci_userchan {
+    status = "disabled";
+};

@@ -1,0 +1,55 @@
+/* SPDX-License-Identifier: MIT */
+
+#include "../defy_test.dtsi"
+
+/*
+ * The matrix transform, boards/dygma/defy/defy-transform.dtsi. Base becomes a
+ * layer that types A to X as the events below press its keys: one key of each
+ * row of the left half, then of the right half, then every thumb key in
+ * matrix order, (4,0) to (4,15). A wrong row, column offset or thumb order
+ * types another letter. The layer lists the keys in the keymap's order, so
+ * its lower thumb rows read backwards.
+ */
+/ {
+    keymap {
+        layer_0 {
+            bindings = <
+                &none &none &none &none &none &none &kp A    &kp E &none &none &none &none &none &none
+                &kp B &none &none &none &none &none &none    &none &none &none &none &none &none &kp F
+                &none &none &none &kp C &none &none &none    &none &none &none &kp G &none &none &none
+                &none &none &none &none &none &kp D                &kp H &none &none &none &none &none
+                                  &kp I &kp J &kp K &kp L    &kp U &kp V &kp W &kp X
+                                  &kp P &kp O &kp N &kp M    &kp T &kp S &kp R &kp Q
+            >;
+        };
+    };
+};
+
+&kscan {
+    events = <
+        ZMK_MOCK_PRESS(0,6,10)  ZMK_MOCK_RELEASE(0,6,10)
+        ZMK_MOCK_PRESS(1,0,10)  ZMK_MOCK_RELEASE(1,0,10)
+        ZMK_MOCK_PRESS(2,3,10)  ZMK_MOCK_RELEASE(2,3,10)
+        ZMK_MOCK_PRESS(3,5,10)  ZMK_MOCK_RELEASE(3,5,10)
+        ZMK_MOCK_PRESS(0,9,10)  ZMK_MOCK_RELEASE(0,9,10)
+        ZMK_MOCK_PRESS(1,15,10) ZMK_MOCK_RELEASE(1,15,10)
+        ZMK_MOCK_PRESS(2,12,10) ZMK_MOCK_RELEASE(2,12,10)
+        ZMK_MOCK_PRESS(3,10,10) ZMK_MOCK_RELEASE(3,10,10)
+        ZMK_MOCK_PRESS(4,0,10)  ZMK_MOCK_RELEASE(4,0,10)
+        ZMK_MOCK_PRESS(4,1,10)  ZMK_MOCK_RELEASE(4,1,10)
+        ZMK_MOCK_PRESS(4,2,10)  ZMK_MOCK_RELEASE(4,2,10)
+        ZMK_MOCK_PRESS(4,3,10)  ZMK_MOCK_RELEASE(4,3,10)
+        ZMK_MOCK_PRESS(4,4,10)  ZMK_MOCK_RELEASE(4,4,10)
+        ZMK_MOCK_PRESS(4,5,10)  ZMK_MOCK_RELEASE(4,5,10)
+        ZMK_MOCK_PRESS(4,6,10)  ZMK_MOCK_RELEASE(4,6,10)
+        ZMK_MOCK_PRESS(4,7,10)  ZMK_MOCK_RELEASE(4,7,10)
+        ZMK_MOCK_PRESS(4,8,10)  ZMK_MOCK_RELEASE(4,8,10)
+        ZMK_MOCK_PRESS(4,9,10)  ZMK_MOCK_RELEASE(4,9,10)
+        ZMK_MOCK_PRESS(4,10,10) ZMK_MOCK_RELEASE(4,10,10)
+        ZMK_MOCK_PRESS(4,11,10) ZMK_MOCK_RELEASE(4,11,10)
+        ZMK_MOCK_PRESS(4,12,10) ZMK_MOCK_RELEASE(4,12,10)
+        ZMK_MOCK_PRESS(4,13,10) ZMK_MOCK_RELEASE(4,13,10)
+        ZMK_MOCK_PRESS(4,14,10) ZMK_MOCK_RELEASE(4,14,10)
+        ZMK_MOCK_PRESS(4,15,10) ZMK_MOCK_RELEASE(4,15,10)
+    >;
+};

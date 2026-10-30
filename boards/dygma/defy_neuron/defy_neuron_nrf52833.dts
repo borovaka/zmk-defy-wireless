@@ -1,0 +1,72 @@
+/*
+ * The wireless Neuron as a plain Zephyr board, which the UF2 loader
+ * (apps/defy_loader/) builds. The zmk variant, defy_neuron_nrf52833_zmk.dts,
+ * adds the cables. The loader runs before ZMK at every start, so both take
+ * UICR, the clocks and the status LED from here: NFC pins as GPIOs, no pin
+ * reset, and the RC oscillator for the 32 kHz clock (both defconfigs).
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/dts-v1/;
+
+#include <nordic/nrf52833_qiaa.dtsi>
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+#include "defy_neuron-partitions.dtsi"
+#include "defy_neuron-pinctrl.dtsi"
+
+/ {
+    model = "Dygma Neuron (wireless)";
+    compatible = "dygma,defy-neuron";
+
+    chosen {
+        zephyr,sram = &sram0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &code_partition;
+    };
+
+    /*
+     * PWM sets the status LED's brightness, in ZMK (status/Kconfig) and in
+     * the UF2 loader (apps/defy_loader/src/led.c).
+     */
+    leds {
+        compatible = "pwm-leds";
+        led_green: led_green {
+            pwms = <&pwm0 0 PWM_USEC(100) PWM_POLARITY_NORMAL>;
+        };
+        led_red: led_red {
+            pwms = <&pwm0 1 PWM_USEC(100) PWM_POLARITY_NORMAL>;
+        };
+    };
+};
+
+/*
+ * The LEDs are on P0.09 and P0.10, the NFC pins. Zephyr's start code writes
+ * UICR NFCPINS once, while it still selects NFC.
+ */
+&uicr {
+    nfct-pins-as-gpios;
+};
+
+/*
+ * GPREGRET2 holds the half updater's "halves held" marker
+ * (updater/defy_updater_usb.c), so Zephyr's GPREGRET driver gets no device
+ * for it.
+ */
+&gpregret2 {
+    status = "disabled";
+};
+
+zephyr_udc0: &usbd {
+    status = "okay";
+};
+
+/* The status LED. */
+&pwm0 {
+    status = "okay";
+    pinctrl-0 = <&defy_status_led>;
+    pinctrl-1 = <&defy_status_led_sleep>;
+    pinctrl-names = "default", "sleep";
+};

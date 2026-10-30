@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+
+config BOARD_DEFY_RIGHT
+    select SOC_RP2040
+    select ZMK_BOARD_COMPAT
+    # sys_poweroff() comes from soc/rp2040/poweroff.c in this module.
+    select HAS_POWEROFF
+    # &bootloader restarts a half into the RP2040 ROM's UF2 mode.
+    imply RETAINED_MEM
+    imply RETENTION
+    imply RETENTION_BOOT_MODE

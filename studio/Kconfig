@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+
+config DEFY_STUDIO_USB_PRIORITY
+    bool "Keep Studio on an available USB connection"
+    default y
+    depends on ZMK_STUDIO_TRANSPORT_UART && (ZMK_USB || ARCH_POSIX)
+    help
+      Lets Studio work over USB whichever output carries the keys. While a
+      USB host is ready, Studio's RPC sees USB as the selected endpoint, and
+      a Bluetooth Studio disconnect does not lock Studio. Key reports keep
+      the selected output.

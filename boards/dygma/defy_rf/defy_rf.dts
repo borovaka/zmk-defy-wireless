@@ -1,0 +1,126 @@
+/*
+ * The nRF52820 on the RF CPU board of each Defy half.
+ *
+ * Y1 is taken to be the 32 MHz crystal and Y2 the 32.768 kHz one; neither
+ * has been measured. The battery monitor sits on the 0x40004000 serial
+ * instance (TWIM1), which leaves instance 0 for the SPI link to the
+ * RP2040.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/dts-v1/;
+
+#include <nordic/nrf52820_qdaa.dtsi>
+#include "defy_rf-pinctrl.dtsi"
+
+/ {
+    model = "Dygma Defy RF board";
+    compatible = "dygma,defy-rf";
+
+    chosen {
+        zephyr,sram = &sram0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &code_partition;
+    };
+
+    zephyr,user {
+        /*
+         * The SPIS chip select from the RP2040, CSN in defy_rf-pinctrl.dtsi.
+         * Going low wakes the radio from System OFF.
+         */
+        chip-select-gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
+    };
+};
+
+/*
+ * TP3 on the board underside is labelled nRESET, but gpio-as-nreset stays
+ * off: Zephyr would program UICR at boot to set it, and this firmware never
+ * writes outside its own partition.
+ */
+
+&gpiote {
+    status = "okay";
+};
+
+&gpio0 {
+    status = "okay";
+};
+
+/* SPI slave to the RP2040, which is the SPI master and Bluetooth host. */
+&spi0 {
+    compatible = "nordic,nrf-spis";
+    status = "okay";
+    def-char = <0x00>;
+    pinctrl-0 = <&spi0_default>;
+    pinctrl-1 = <&spi0_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    bt_hci_spi_slave: bt-hci@0 {
+        compatible = "zephyr,bt-hci-spi-slave";
+        reg = <0>;
+        /*
+         * Data ready to the RP2040's GPIO24, on the pin the stock radio
+         * firmware drives as its output to the RP2040.
+         */
+        irq-gpios = <&gpio0 16 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+    };
+};
+
+/*
+ * Battery gauge at I2C address 0x36 and charger at 0x6a. Where the gauge does
+ * not answer, apps/defy_radio measures the battery with the comparator.
+ */
+&i2c1 {
+    compatible = "nordic,nrf-twim";
+    status = "okay";
+    pinctrl-0 = <&i2c1_default>;
+    pinctrl-1 = <&i2c1_sleep>;
+    pinctrl-names = "default", "sleep";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+/*
+ * Dygma's layout, kept as shipped. This firmware takes the place of the stock
+ * radio application at 0x1C000, and the RP2040 installs it through Dygma's
+ * rf_bootloader the way the stock keyscanner installs its own. The MBR, the
+ * S113 SoftDevice, the bootloader and its seal page are never written. S113
+ * stays disabled: it only passes reset on to 0x1C000, and Zephyr points the
+ * vector table at its own. Dygma's keyscanner, put back with Bazecor, finds a
+ * different version in the seal and reinstalls the stock application here.
+ */
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        mbr_partition: partition@0 {
+            reg = <0x00000000 0x1000>;
+            read-only;
+        };
+
+        softdevice_partition: partition@1000 {
+            reg = <0x00001000 0x1b000>;
+            read-only;
+        };
+
+        /*
+         * rf_bootloader programs one word past every write, so
+         * scripts/package_radio.py keeps the slot's last word free.
+         */
+        code_partition: partition@1c000 {
+            reg = <0x0001c000 0x1d000>;
+        };
+
+        bootloader_partition: partition@39000 {
+            reg = <0x00039000 0x4000>;
+            read-only;
+        };
+
+        bootloader_state_partition: partition@3d000 {
+            reg = <0x0003d000 0x3000>;
+            read-only;
+        };
+    };
+};
