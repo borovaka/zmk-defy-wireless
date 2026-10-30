@@ -238,10 +238,10 @@ def repository_name(url):
 def west_revision(repo, config, head, run=subprocess.run, trust=None):
     """The revision the config directory's west.yml names for this module.
 
-    None unless west checked the module out at that revision, HEAD being its
-    refs/west/manifest-rev, or when the revision is a commit's hash.
+    None unless west checked the module out at that revision, HEAD being the
+    manifest-rev branch west keeps there, or when the revision is a commit's hash.
     """
-    fetched = git(repo, ["rev-parse", "--verify", "--quiet", "refs/west/manifest-rev^{commit}"],
+    fetched = git(repo, ["rev-parse", "--verify", "--quiet", "refs/heads/manifest-rev^{commit}"],
                   run, trust, check=False)
     if fetched.returncode or fetched.stdout.strip() != head:
         return None

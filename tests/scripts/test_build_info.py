@@ -16,7 +16,7 @@ build = load_script("defy_build_info", "build")
 HEAD = "2826cb2f0c9a3f1d5e7b8a6c4d2e0f1a3b5c7d9e"
 KEYMAP_HEAD = "357c43abe9c0c456d29a1fec90e3a2a8c5705e9c"
 DESCRIBE = ("describe", "--tags", "--always", "--dirty", "--abbrev=7")
-MANIFEST_REV = ("rev-parse", "--verify", "--quiet", "refs/west/manifest-rev^{commit}")
+MANIFEST_REV = ("rev-parse", "--verify", "--quiet", "refs/heads/manifest-rev^{commit}")
 STATUS = ("status", "--porcelain", "--untracked-files=no")
 ORIGIN = ("config", "--get", "remote.origin.url")
 TIME = ("log", "-1", "--no-show-signature", "--format=%ci", "HEAD")
