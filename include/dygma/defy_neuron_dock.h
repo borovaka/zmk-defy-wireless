@@ -8,6 +8,7 @@
 #ifndef DYGMA_DEFY_NEURON_DOCK_H
 #define DYGMA_DEFY_NEURON_DOCK_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -31,6 +32,13 @@ enum defy_neuron_place {
 /* The halves whose cables are in, debounced: DEFY_NEURON_CABLE_LEFT and _RIGHT. */
 uint8_t defy_neuron_cables(void);
 enum defy_neuron_place defy_neuron_place(void);
+/*
+ * Whether the Neuron runs from a half's battery: true once it has had no
+ * computer for 5 s with one cable in or no USB power, and false from the first
+ * 250 ms sample on a computer, or on USB power with no cable or both. Each
+ * change calls defy_lighting_central_power_changed().
+ */
+bool defy_neuron_on_battery(void);
 /* The updater's dock snapshot. Returns its length, or 0 if out is too small. */
 size_t defy_neuron_dock_status(uint8_t *out, size_t capacity);
 

@@ -39,7 +39,7 @@
 
 LOG_MODULE_REGISTER(defy_wired_central, CONFIG_ZMK_LOG_LEVEL);
 
-/* How often the worker checks for a silent cable when nothing wakes it. */
+/* How often the worker runs while it has something to time; see service_ports(). */
 #define SILENCE_CHECK_MS 10
 
 struct wired_port {
@@ -562,10 +562,19 @@ static void arm_port(struct wired_port *port, int64_t now) {
     port->arm_failed = err < 0;
 }
 
-static void service_ports(int64_t now) {
+/*
+ * Services both ports and returns how long the worker may then wait for an
+ * event: SILENCE_CHECK_MS while a cable is connected, to notice its silence,
+ * or while a port is not armed, to arm it after a failed arm or once the
+ * hybrid central's maintenance ends, which does not wake the worker. Otherwise
+ * K_FOREVER, as only an event brings work: a completed transfer, a command,
+ * enabling or this central's maintenance.
+ */
+static k_timeout_t service_ports(int64_t now) {
     k_mutex_lock(&ports_lock, K_FOREVER);
     bool paused = atomic_get(&maintenance) || defy_hybrid_central_is_maintenance();
     bool is_enabled = atomic_get(&enabled) != 0 && !paused;
+    bool timing = false;
     for (size_t i = 0; i < ARRAY_SIZE(ports); i++) {
         struct wired_port *port = &ports[i];
         if (atomic_cas(&port->completed, 1, 0)) {
@@ -586,9 +595,12 @@ static void service_ports(int64_t now) {
         if (!port->armed && !paused) {
             arm_port(port, now);
         }
+        /* The end of this central's maintenance wakes the worker. */
+        timing |= port->receiver.connected || (!port->armed && !atomic_get(&maintenance));
     }
     update_status();
     k_mutex_unlock(&ports_lock);
+    return timing ? K_MSEC(SILENCE_CHECK_MS) : K_FOREVER;
 }
 
 int defy_wired_central_set_maintenance(bool value) {
@@ -615,8 +627,8 @@ static void worker(void *p1, void *p2, void *p3) {
     ARG_UNUSED(p2);
     ARG_UNUSED(p3);
     while (true) {
-        service_ports(k_uptime_get());
-        k_sem_take(&worker_wake, K_MSEC(SILENCE_CHECK_MS));
+        k_timeout_t wait = service_ports(k_uptime_get());
+        k_sem_take(&worker_wake, wait);
     }
 }
 

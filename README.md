@@ -287,7 +287,7 @@ To add a wrap, add `zephyr_link_libraries(-Wl,--wrap=<name>)` to the `CMakeLists
 | [docs/radio-install.md](docs/radio-install.md) | The radio's flash layout and how a half installs the controller |
 | [docs/automatic-transports.md](docs/automatic-transports.md) | Cable and Bluetooth routing, the cable protocol and the lighting messages, host output, dock detection, pairing reset |
 | [docs/ble-input-recovery.md](docs/ble-input-recovery.md) | How the Neuron recovers stalled split connections and subscriptions |
-| [docs/power-and-wake.md](docs/power-and-wake.md) | Half idle polling, dormant sleep and wake, USB report recovery |
+| [docs/power-and-wake.md](docs/power-and-wake.md) | Half idle polling, dormant sleep and wake, sleep on the dock, USB report recovery |
 | [docs/battery.md](docs/battery.md) | Battery measurement, charger servicing, the battery display, host battery reporting |
 | [docs/lighting.md](docs/lighting.md) | The lighting's looks, layer and key colours, the profile chooser, start-up and fault colours, the Neuron's LED |
 | [docs/split-diagnostics.md](docs/split-diagnostics.md) | Split status, the key event trace and the logging builds |
@@ -308,7 +308,7 @@ To add a wrap, add `zephyr_link_libraries(-Wl,--wrap=<name>)` to the `CMakeLists
 | `battery/`, `lighting/`, `status/`, `power/` | Battery telemetry and the halves' control service; lighting, host feedback and the halves' LED displays, start-up colours included; the Neuron's LED and dock detection; half sleep |
 | `updater/`, `bootloader/` | The Neuron's half updater, software entry to its bootloader, and `&defy_drive`, which restarts the Neuron as the UF2 loader's drive |
 | `diagnostics/` | The halves' fault display and fault recovery, the Neuron's key trace |
-| `soc/rp2040/` | RP2040 power off to DORMANT with key wake, and the handoff from Dygma's bootloader, which stops the watchdog it leaves running |
+| `soc/rp2040/` | RP2040 power off to DORMANT with key wake, the handoff from Dygma's bootloader, which stops the watchdog it leaves running, and the USB PLL turned off after Zephyr's clock driver starts it |
 | `studio/` | Keeps Studio on USB |
 | `snippets/` | The build snippets the targets combine |
 | `dts/` | `behaviors/defy.dtsi`: the behaviours a keymap binds, `&defy_profiles`, `&defy_lighting`, `&defy_battery` and `&defy_drive`, and the nodes it fills with layer and key colours; the devicetree bindings for these and for the drivers |

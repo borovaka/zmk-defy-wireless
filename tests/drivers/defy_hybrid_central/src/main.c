@@ -57,9 +57,12 @@ static bool in_service;
 static bool run_system_work;
 static int maintenance_wire_error;
 static bool maintenance_wire_paused;
+/* The work item the module last submitted to the system work queue. */
+static struct k_work *submitted_work;
 static int submit_real_work(struct k_work *work) { return k_work_submit(work); }
 
 static int submit_test_work(struct k_work *work) {
+    submitted_work = work;
     return run_system_work ? submit_real_work(work) : 1;
 }
 static int submit_test_split_work(struct k_work_q *queue, struct k_work *work) {
@@ -119,6 +122,8 @@ void defy_key_trace_add(uint8_t kind, uint8_t flags, uint16_t value, uint32_t ex
     traces[trace_count++].preceding_key_events = event_count;
 }
 static bool raw_available = true;
+/* What ZMK's Bluetooth central reports of its split connections. */
+static enum zmk_split_transport_connections_status raw_connections;
 static unsigned int raw_starts;
 
 void defy_usb_input_snapshot(uint8_t side, const uint8_t bitmap[DEFY_WIRED_BITMAP_SIZE],
@@ -145,7 +150,8 @@ static int raw_set_enabled(bool value) {
     return 0;
 }
 static struct zmk_split_transport_status raw_get_status(void) {
-    return (struct zmk_split_transport_status){.available = raw_available};
+    return (struct zmk_split_transport_status){.available = raw_available,
+                                               .connections = raw_connections};
 }
 static int raw_set_callback(zmk_split_transport_central_status_changed_cb_t callback) {
     zassert_equal(callback, raw_status_changed);
@@ -281,6 +287,9 @@ uint16_t bt_gatt_attr_value_handle(const struct bt_gatt_attr *attr) {
     return ((const struct bt_gatt_chrc *)attr->user_data)->value_handle;
 }
 
+static unsigned int rescans;
+void defy_split_central_rescan(void) { rescans++; }
+
 static void reset(void *fixture) {
     ARG_UNUSED(fixture);
     run_system_work = false;
@@ -297,6 +306,9 @@ static void reset(void *fixture) {
     atomic_set(&slot_sides[1], DEFY_WIRED_SIDE_UNKNOWN);
     memset(ble_latest, 0, sizeof(ble_latest));
     memset(peers, 0, sizeof(peers));
+    scan_fast_until = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    k_work_cancel_delayable(&scan_deadline);
+    rescans = 0;
     battery_identify_error = 0;
     memset(battery_epochs, 0, sizeof(battery_epochs));
     memset(battery_sides_test, DEFY_WIRED_SIDE_UNKNOWN, sizeof(battery_sides_test));
@@ -343,6 +355,7 @@ static void reset(void *fixture) {
     original_subscribe_calls = 0;
     original_subscribe_error = 0;
     raw_available = true;
+    raw_connections = ZMK_SPLIT_TRANSPORT_CONNECTIONS_STATUS_DISCONNECTED;
     raw_starts = 0;
     wired_started = false;
     ble_started = false;
@@ -2139,6 +2152,133 @@ ZTEST(defy_hybrid_central, test_cleared_hold_off_ends_both_holds_and_starts_doub
     zassert_equal(defy_hybrid_ble_hold_off(0), BLE_REJECT_HOLD_MS);
 }
 
+static void assert_scan_deadline_in(int64_t ms) {
+    zassert_within(k_work_delayable_remaining_get(&scan_deadline), k_ms_to_ticks_ceil32(ms),
+                   k_ms_to_ticks_ceil32(100));
+}
+
+ZTEST(defy_hybrid_central, test_scan_is_fast_after_start_up_then_slow) {
+    now = 20000;
+    const struct bt_le_scan_param *param = defy_hybrid_ble_scan_param();
+    zassert_equal_ptr(param, &fast_scan);
+    zassert_equal(param->type, BT_LE_SCAN_TYPE_PASSIVE);
+    zassert_equal(param->options, BT_LE_SCAN_OPT_FILTER_DUPLICATE);
+    zassert_equal(param->interval, BT_GAP_SCAN_FAST_INTERVAL);
+    zassert_equal(param->window, BT_GAP_SCAN_FAST_WINDOW);
+    assert_scan_deadline_in(CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS - 20000);
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS - 1;
+    scan_slow_work(NULL);
+    zassert_equal(rescans, 0);
+    now++;
+    scan_slow_work(NULL);
+    zassert_equal(rescans, 1);
+    param = defy_hybrid_ble_scan_param();
+    zassert_equal_ptr(param, &slow_scan);
+    zassert_equal(param->type, BT_LE_SCAN_TYPE_PASSIVE);
+    zassert_equal(param->options, BT_LE_SCAN_OPT_FILTER_DUPLICATE);
+    /* 640 ms and 20 ms in 0.625 ms units. */
+    zassert_equal(param->interval, 1024);
+    zassert_equal(param->window, 32);
+}
+
+ZTEST(defy_hybrid_central, test_split_disconnect_scans_fast_again) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    zassert_false(k_work_delayable_is_pending(&scan_deadline));
+    connected(connection(2), 0);
+    disconnected(connection(2), BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    connected(connection(0), 0);
+    disconnected(connection(0), BT_HCI_ERR_CONN_TIMEOUT);
+    zassert_equal(rescans, 1);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &fast_scan);
+    assert_scan_deadline_in(CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS);
+    /* A disconnect during the fast scan moves its end without a restart. */
+    now += 1000;
+    connected(connection(1), 0);
+    disconnected(connection(1), BT_HCI_ERR_CONN_TIMEOUT);
+    zassert_equal(rescans, 1);
+    now += CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS - 1000;
+    scan_slow_work(NULL);
+    zassert_equal(rescans, 1);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &fast_scan);
+    now += 1000;
+    scan_slow_work(NULL);
+    zassert_equal(rescans, 2);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+}
+
+ZTEST(defy_hybrid_central, test_maintenance_end_and_pairing_reset_scan_fast_again) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    zassert_ok(defy_hybrid_ble_set_maintenance(true));
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    zassert_ok(defy_hybrid_ble_set_maintenance(false));
+    zassert_equal(rescans, 1);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &fast_scan);
+    now += CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    defy_hybrid_ble_clear_hold_off();
+    zassert_equal(rescans, 2);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &fast_scan);
+}
+
+ZTEST(defy_hybrid_central, test_cable_loss_without_bluetooth_scans_fast_again) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    /* The right half's Bluetooth link does not count for the left half. */
+    ble(0, 1, 7);
+    cable(DEFY_WIRED_LEFT, 9, -1);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    cable_off(DEFY_WIRED_LEFT, 9);
+    zassert_equal(rescans, 1);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &fast_scan);
+    assert_scan_deadline_in(CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS);
+}
+
+ZTEST(defy_hybrid_central, test_cable_loss_with_bluetooth_keeps_the_scan_slow) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    ble(1, 1, 0);
+    cable(DEFY_WIRED_LEFT, 9, 0);
+    cable_off(DEFY_WIRED_LEFT, 9);
+    zassert_equal(rescans, 0);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+    zassert_false(k_work_delayable_is_pending(&scan_deadline));
+}
+
+ZTEST(defy_hybrid_central, test_repeated_cable_loss_reports_do_not_scan_fast_again) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    cable(DEFY_WIRED_LEFT, 9, -1);
+    cable_off(DEFY_WIRED_LEFT, 9);
+    zassert_equal(rescans, 1);
+    now += CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    scan_slow_work(NULL);
+    zassert_equal(rescans, 2);
+    /* Only the link's transition counts, not a later report of it or of an older session. */
+    cable_off(DEFY_WIRED_LEFT, 9);
+    cable_off(DEFY_WIRED_LEFT, 8);
+    zassert_equal(rescans, 2);
+    zassert_equal_ptr(defy_hybrid_ble_scan_param(), &slow_scan);
+}
+
+ZTEST(defy_hybrid_central, test_cable_loss_during_maintenance_does_not_scan_fast) {
+    now = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    cable(DEFY_WIRED_LEFT, 9, -1);
+    run_system_work = true;
+    zassert_ok(defy_hybrid_central_set_maintenance(true));
+    stop_system_work();
+    /* The cable central drops its links for maintenance. */
+    zassert_ok(defy_hybrid_central_wired_update(DEFY_WIRED_LEFT, 9, false, NULL));
+    zassert_equal(k_msgq_num_used_get(&hybrid_snapshots), 0);
+    zassert_equal(rescans, 0);
+    run_system_work = true;
+    zassert_ok(defy_hybrid_central_set_maintenance(false));
+    stop_system_work();
+    k_work_cancel_delayable(&timeout_work);
+    /* The end of maintenance scans fast, and a late report of the old link does nothing. */
+    zassert_equal(rescans, 1);
+    cable_off(DEFY_WIRED_LEFT, 9);
+    zassert_equal(rescans, 1);
+}
+
 ZTEST(defy_hybrid_central, test_queued_battery_rejection_survives_queue_overflow) {
     struct bt_gatt_discover_params params;
     struct bt_gatt_subscribe_params subscription;
@@ -2298,3 +2438,100 @@ ZTEST(defy_hybrid_central, test_key_trace_marks_full_queue_and_unlinked_releases
     assert_trace(0, DEFY_KEY_TRACE_POSITION, DEFY_WIRED_LEFT, 0, 0);
 }
 
+
+/* Runs the service work as the system work queue would, and returns whether it
+ * scheduled itself again. The test cancels that. */
+static bool service_reschedules(void) {
+    in_service = true;
+    service_work_cb(NULL);
+    in_service = false;
+    bool pending = k_work_delayable_is_pending(&timeout_work);
+    k_work_cancel_delayable(&timeout_work);
+    return pending;
+}
+
+ZTEST(defy_hybrid_central, test_service_stops_while_nothing_is_connected) {
+    /* Both transports start, and with no half on either there is nothing to time. */
+    zassert_false(service_reschedules());
+    zassert_equal(raw_starts, 2);
+    zassert_ok(set_enabled(false));
+    zassert_false(service_reschedules());
+
+    /* A transport that cannot start yet is tried again. */
+    raw_available = false;
+    submitted_work = NULL;
+    zassert_ok(set_enabled(true));
+    zassert_equal_ptr(submitted_work, &service_work);
+    zassert_true(service_reschedules());
+    raw_available = true;
+    zassert_false(service_reschedules());
+    zassert_equal(raw_starts, 4);
+}
+
+ZTEST(defy_hybrid_central, test_service_runs_while_a_cable_is_up_and_through_its_handoff) {
+    zassert_false(service_reschedules());
+    uint8_t frame[DEFY_HYBRID_BLE_FRAME_SIZE];
+    set_position(frame, 0);
+    submitted_work = NULL;
+    zassert_ok(defy_hybrid_central_wired_update(DEFY_WIRED_LEFT, 9, true, frame));
+    zassert_equal_ptr(submitted_work, &service_work);
+    zassert_true(service_reschedules());
+    assert_event(0, DEFY_WIRED_LEFT, 0, true);
+    now = 1000;
+    zassert_true(service_reschedules());
+
+    /* The loss waits out the handoff's grace, then nothing is left to time. */
+    submitted_work = NULL;
+    zassert_ok(defy_hybrid_central_wired_update(DEFY_WIRED_LEFT, 9, false, NULL));
+    zassert_equal_ptr(submitted_work, &service_work);
+    zassert_true(service_reschedules());
+    assert_event(1, DEFY_WIRED_LEFT, 0, false);
+    now += CONFIG_DEFY_HYBRID_HANDOFF_GRACE_MS - 1;
+    zassert_true(service_reschedules());
+    now++;
+    zassert_false(service_reschedules());
+    zassert_equal(event_count, 2);
+}
+
+ZTEST(defy_hybrid_central, test_service_runs_until_a_bluetooth_half_expires) {
+    zassert_false(service_reschedules());
+    uint8_t frame[DEFY_HYBRID_BLE_FRAME_SIZE];
+    set_position(frame, 7);
+    submitted_work = NULL;
+    zassert_ok(defy_hybrid_central_ble_update(0, 1, true, frame, sizeof(frame)));
+    zassert_equal_ptr(submitted_work, &service_work);
+    zassert_true(service_reschedules());
+    assert_event(0, DEFY_WIRED_RIGHT, 7, true);
+    now = CONFIG_DEFY_HYBRID_BLE_TIMEOUT_MS - 1;
+    zassert_true(service_reschedules());
+    now++;
+    zassert_false(service_reschedules());
+    assert_event(1, DEFY_WIRED_RIGHT, 7, false);
+}
+
+ZTEST(defy_hybrid_central, test_service_runs_for_a_bluetooth_half_that_never_reports) {
+    zassert_false(service_reschedules());
+    /* ZMK's Bluetooth central reports the connection, which submits the work. */
+    raw_connections = ZMK_SPLIT_TRANSPORT_CONNECTIONS_STATUS_SOME_CONNECTED;
+    submitted_work = NULL;
+    zassert_ok(raw_status_changed(&bt_central, raw_get_status()));
+    zassert_equal_ptr(submitted_work, &service_work);
+    struct bt_gatt_discover_params params;
+    discover_position(0, &params, 10);
+    zassert_true(service_reschedules());
+    now = 9999;
+    zassert_true(service_reschedules());
+    zassert_is_null(queued_split_work);
+    now = 10000;
+    zassert_true(service_reschedules());
+    run_split_work();
+    zassert_equal(disconnect_calls[0], 1);
+
+    /* Once the half is gone, nothing is left to time. */
+    raw_connections = ZMK_SPLIT_TRANSPORT_CONNECTIONS_STATUS_DISCONNECTED;
+    submitted_work = NULL;
+    disconnected(connection(0), BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    zassert_equal_ptr(submitted_work, &service_work);
+    zassert_false(service_reschedules());
+    zassert_is_null(peers[0].conn);
+}

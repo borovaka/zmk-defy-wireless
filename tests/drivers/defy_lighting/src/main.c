@@ -37,6 +37,8 @@ static int consumer_result;
 static bool consumer_saw_enabled;
 static bool toggle_in_consumer;
 static struct zmk_position_state_changed_event captured_event;
+/* What the dock's defy_neuron_on_battery() answers. */
+static bool neuron_on_battery;
 
 void defy_wired_lighting_changed(void) { publishes++; }
 void defy_control_ble_lighting_changed(void) { publishes++; }
@@ -106,6 +108,7 @@ bool defy_profile_chooser_process(const struct zmk_position_state_changed *event
     ARG_UNUSED(event);
     return false;
 }
+bool defy_neuron_on_battery(void) { return neuron_on_battery; }
 #undef k_work_reschedule
 #undef k_uptime_get
 #undef sys_rand32_get
@@ -206,6 +209,7 @@ static void before(void *fixture) {
     idle_delay = 0;
     consumer_result = ZMK_EV_EVENT_CAPTURED;
     consumer_saw_enabled = toggle_in_consumer = false;
+    neuron_on_battery = false;
     saved_enabled = true;
     look_index = saved_look = 0;
     level = saved_level = FIRST_LEVEL;
@@ -243,7 +247,7 @@ ZTEST(lighting, test_codec_roundtrip_and_strict_validation) {
                                               &decoded), -EINVAL);
     zassert_equal(defy_lighting_control_decode(bytes, sizeof(bytes), DEFY_CONTROL_LIGHTING_SET,
                                               &decoded), -EPROTO);
-    bytes[2] = 2;
+    bytes[2] = BIT(2);
     zassert_equal(defy_lighting_control_decode(bytes, sizeof(bytes), DEFY_CONTROL_LIGHTING_ACK,
                                               &decoded), -EPROTO);
     state.boot = 0;
@@ -251,15 +255,38 @@ ZTEST(lighting, test_codec_roundtrip_and_strict_validation) {
     zassert_equal(defy_lighting_control_encode(&decoded, 1, bytes), -EINVAL);
 }
 
+ZTEST(lighting, test_codec_flags_round_trip_and_reject_unknown_bits) {
+    uint8_t bytes[DEFY_LIGHTING_CONTROL_SIZE];
+    struct defy_lighting_state decoded;
+    /* Neither, on, on battery, and both. */
+    for (uint8_t flags = 0; flags <= DEFY_LIGHTING_FLAGS; flags++) {
+        struct defy_lighting_state state = setting(9, 10, flags & DEFY_LIGHTING_FLAG_ON);
+        state.on_battery = flags & DEFY_LIGHTING_FLAG_ON_BATTERY;
+        zassert_ok(defy_lighting_control_encode(&state, DEFY_CONTROL_LIGHTING_SET, bytes));
+        zassert_equal(bytes[2], flags);
+        zassert_ok(defy_lighting_control_decode(bytes, sizeof(bytes), DEFY_CONTROL_LIGHTING_SET,
+                                                &decoded));
+        zassert_true(defy_lighting_equal(&state, &decoded), "flags %u", flags);
+    }
+    for (unsigned int bit = 2; bit < 8; bit++) {
+        bytes[2] = BIT(bit) | DEFY_LIGHTING_FLAG_ON;
+        decoded = (struct defy_lighting_state){0};
+        zassert_equal(defy_lighting_control_decode(bytes, sizeof(bytes),
+                                                  DEFY_CONTROL_LIGHTING_SET, &decoded),
+                      -EPROTO, "bit %u", bit);
+        zassert_equal(decoded.boot, 0);
+    }
+}
+
 ZTEST(lighting, test_codec_carries_the_colours_after_boot_and_revision) {
     struct defy_lighting_state state = {
-        .boot = 0x01020304, .revision = 0x05060708, .enabled = true,
+        .boot = 0x01020304, .revision = 0x05060708, .enabled = true, .on_battery = true,
         .keys = {0x11, 0x12, 0x13}, .underglow = {0x21, 0x22, 0x23},
         .groups = 0x8001, .level = 0x30,
     };
     struct defy_lighting_state decoded;
     uint8_t bytes[DEFY_LIGHTING_CONTROL_SIZE];
-    static const uint8_t expected[] = {3, DEFY_CONTROL_LIGHTING_SET, 1, 4, 3, 2, 1, 8, 7, 6, 5,
+    static const uint8_t expected[] = {4, DEFY_CONTROL_LIGHTING_SET, 3, 4, 3, 2, 1, 8, 7, 6, 5,
                                        0x11, 0x12, 0x13, 0x21, 0x22, 0x23, 0x01, 0x80, 0x30};
     BUILD_ASSERT(sizeof(expected) == DEFY_LIGHTING_CONTROL_SIZE);
     zassert_ok(defy_lighting_control_encode(&state, DEFY_CONTROL_LIGHTING_SET, bytes));
@@ -271,6 +298,9 @@ ZTEST(lighting, test_codec_carries_the_colours_after_boot_and_revision) {
     zassert_false(defy_lighting_equal(&state, &decoded));
     decoded = state;
     decoded.level++;
+    zassert_false(defy_lighting_equal(&state, &decoded));
+    decoded = state;
+    decoded.on_battery = false;
     zassert_false(defy_lighting_equal(&state, &decoded));
     /* Groups need a level to draw them with. */
     bytes[19] = 0;
@@ -681,6 +711,34 @@ ZTEST(lighting, test_colours_reach_the_leds_and_a_changed_duplicate_is_refused) 
     zassert_true(defy_lighting_equal(&applied, &state));
 }
 
+ZTEST(lighting, test_a_power_change_alone_is_kept_and_acknowledged_with_the_same_look) {
+    struct defy_lighting_state state = setting(1, 1, true);
+    state.keys = (struct defy_lighting_colour){1, 2, 3};
+    zassert_ok(defy_lighting_peripheral_apply(&state, DEFY_LINK_WIRED, 1));
+    struct defy_lighting_view shown = rendered_view;
+    /* Bit 1 alone, under the next revision as the Neuron sends every change. */
+    state.on_battery = true;
+    zassert_equal(defy_lighting_peripheral_apply(&state, DEFY_LINK_WIRED, 1), -EPROTO);
+    state.revision = 2;
+    zassert_ok(defy_lighting_peripheral_apply(&state, DEFY_LINK_WIRED, 1));
+
+    struct defy_lighting_state kept;
+    zassert_true(defy_lighting_peripheral_get(&kept));
+    zassert_true(kept.on_battery);
+    zassert_true(defy_lighting_equal(&kept, &state));
+    /* The acknowledgement, as the half's Bluetooth read encodes it. */
+    uint8_t message[DEFY_LIGHTING_CONTROL_SIZE];
+    struct defy_lighting_state acknowledged;
+    zassert_ok(defy_lighting_control_encode(&kept, DEFY_CONTROL_LIGHTING_ACK, message));
+    zassert_equal(message[2], DEFY_LIGHTING_FLAG_ON | DEFY_LIGHTING_FLAG_ON_BATTERY);
+    zassert_ok(defy_lighting_control_decode(message, sizeof(message), DEFY_CONTROL_LIGHTING_ACK,
+                                            &acknowledged));
+    zassert_true(defy_lighting_equal(&acknowledged, &state));
+    /* The LEDs get the same view, which same_look() in defy_half_leds.c does not redraw. */
+    zassert_equal(renders, 2);
+    zassert_mem_equal(&rendered_view, &shown, sizeof(shown));
+}
+
 ZTEST(lighting, test_older_opposite_setting_cannot_overtake_newer_route) {
     defy_lighting_peripheral_ble_epoch(10);
     zassert_ok(apply(1, 3, false, DEFY_LINK_BLE, 10));
@@ -821,6 +879,139 @@ ZTEST(lighting, test_the_highest_active_layer_with_colours_decides) {
     zassert_colours(red, dark);
 }
 
+ZTEST(lighting, test_power_changes_send_a_new_state_while_the_lights_are_on) {
+    zassert_ok(lighting_settings_commit());
+    zassert_false(desired.on_battery);
+    neuron_on_battery = true;
+    defy_lighting_central_power_changed();
+    zassert_true(desired.on_battery);
+    zassert_true(desired.enabled);
+    zassert_equal(desired.revision, 2);
+    zassert_equal(publishes, 4);
+    zassert_colours(first_keys, first_underglow);
+    /* Nothing changed, nothing to send. */
+    defy_lighting_central_power_changed();
+    zassert_equal(desired.revision, 2);
+    zassert_equal(publishes, 4);
+    /* A key press and a layer keep it. */
+    zassert_ok(key_event(0, 1, true));
+    set_layer(1, true);
+    zassert_true(desired.on_battery);
+    zassert_equal(desired.revision, 3);
+    neuron_on_battery = false;
+    defy_lighting_central_power_changed();
+    zassert_false(desired.on_battery);
+    zassert_equal(desired.revision, 4);
+    zassert_equal(publishes, 8);
+    /* Nothing of it is saved. */
+    zassert_equal(saves + look_saves + schedules, 0);
+}
+
+ZTEST(lighting, test_power_changes_send_a_new_state_while_the_lights_are_off) {
+    zassert_ok(lighting_settings_commit());
+    zassert_ok(defy_lighting_command(DEFY_LIGHTING_TOGGLE));
+    set_layer(1, true);
+    zassert_equal(desired.revision, 2);
+    zassert_equal(publishes, 4);
+    neuron_on_battery = true;
+    defy_lighting_central_power_changed();
+    zassert_true(desired.on_battery);
+    zassert_false(desired.enabled);
+    zassert_equal(desired.revision, 3);
+    zassert_equal(publishes, 6);
+    /* The colours still wait for the lights. */
+    zassert_colours(first_keys, first_underglow);
+    defy_lighting_central_power_changed();
+    zassert_equal(publishes, 6);
+    /* Idle too. */
+    zassert_ok(defy_lighting_command(DEFY_LIGHTING_TOGGLE));
+    now = 60000;
+    idle_expired(&idle_work.work);
+    zassert_false(desired.enabled);
+    unsigned int revision = desired.revision;
+    neuron_on_battery = false;
+    defy_lighting_central_power_changed();
+    zassert_false(desired.on_battery);
+    zassert_equal(desired.revision, revision + 1);
+}
+
+ZTEST(lighting, test_power_before_the_settings_waits_for_them) {
+    neuron_on_battery = true;
+    defy_lighting_central_power_changed();
+    zassert_equal(publishes, 0);
+    zassert_equal(desired.revision, 0);
+    zassert_ok(lighting_settings_commit());
+    zassert_true(desired.on_battery);
+    zassert_equal(desired.revision, 1);
+    zassert_equal(publishes, 2);
+}
+
+/*
+ * The Neuron's state as its links send it, through their codecs, applied by a
+ * half and acknowledged back. The dock is the fake above; the dock's suite
+ * tests when its flag changes and that each change calls
+ * defy_lighting_central_power_changed().
+ */
+ZTEST(lighting, test_the_dock_flag_reaches_a_half_and_returns_over_each_link) {
+    zassert_ok(lighting_settings_commit());
+    struct defy_lighting_state sent, kept;
+    struct defy_lighting_retry retry;
+    neuron_on_battery = true;
+    defy_lighting_central_power_changed();
+    zassert_true(defy_lighting_central_get(&sent));
+    zassert_true(sent.on_battery);
+    defy_lighting_retry_start(&retry, &sent, now);
+
+    /* Docked, over the cable: a 'DL' frame each way. */
+    struct defy_wired_lighting_command command = {
+        .opcode = DEFY_CONTROL_LIGHTING_SET, .side = DEFY_WIRED_LEFT, .session = 1, .state = sent,
+    };
+    uint8_t frame[DEFY_WIRED_FRAME_SIZE];
+    struct defy_wired_control control;
+    zassert_ok(defy_wired_lighting_encode(&command, frame));
+    zassert_ok(defy_wired_control_check(frame, sizeof(frame), &control));
+    zassert_equal(control.flag, DEFY_LIGHTING_FLAG_ON | DEFY_LIGHTING_FLAG_ON_BATTERY);
+    command = (struct defy_wired_lighting_command){0};
+    zassert_ok(defy_wired_lighting_decode(frame, &control, &command));
+    zassert_ok(defy_lighting_peripheral_apply(&command.state, DEFY_LINK_WIRED,
+                                              command.state.boot));
+    zassert_true(defy_lighting_peripheral_get(&kept));
+    zassert_true(kept.on_battery);
+    zassert_true(defy_lighting_equal(&kept, &sent));
+    command = (struct defy_wired_lighting_command){
+        .opcode = DEFY_CONTROL_LIGHTING_ACK, .side = DEFY_WIRED_LEFT, .session = 1, .state = kept,
+    };
+    zassert_ok(defy_wired_lighting_encode(&command, frame));
+    zassert_ok(defy_wired_control_check(frame, sizeof(frame), &control));
+    zassert_ok(defy_wired_lighting_decode(frame, &control, &command));
+    zassert_true(defy_lighting_retry_pending(&retry));
+    defy_lighting_retry_acknowledged(&retry, &command.state);
+    zassert_false(defy_lighting_retry_pending(&retry));
+
+    /* On a computer, over Bluetooth: the control message written, then read back. */
+    neuron_on_battery = false;
+    defy_lighting_central_power_changed();
+    zassert_true(defy_lighting_central_get(&sent));
+    zassert_false(sent.on_battery);
+    zassert_true(defy_lighting_retry_follow(&retry, &sent, now));
+    uint8_t message[DEFY_LIGHTING_CONTROL_SIZE];
+    struct defy_lighting_state received;
+    zassert_ok(defy_lighting_control_encode(&sent, DEFY_CONTROL_LIGHTING_SET, message));
+    zassert_ok(defy_lighting_control_decode(message, sizeof(message), DEFY_CONTROL_LIGHTING_SET,
+                                            &received));
+    defy_lighting_peripheral_ble_epoch(10);
+    zassert_ok(defy_lighting_peripheral_apply(&received, DEFY_LINK_BLE, 10));
+    zassert_true(defy_lighting_peripheral_get(&kept));
+    zassert_false(kept.on_battery);
+    zassert_true(defy_lighting_equal(&kept, &sent));
+    zassert_ok(defy_lighting_control_encode(&kept, DEFY_CONTROL_LIGHTING_ACK, message));
+    zassert_ok(defy_lighting_control_decode(message, sizeof(message), DEFY_CONTROL_LIGHTING_ACK,
+                                            &received));
+    zassert_true(defy_lighting_retry_pending(&retry));
+    defy_lighting_retry_acknowledged(&retry, &received);
+    zassert_false(defy_lighting_retry_pending(&retry));
+}
+
 ZTEST(lighting, test_layer_changes_while_dark_send_nothing) {
     zassert_ok(lighting_settings_commit());
     zassert_ok(defy_lighting_command(DEFY_LIGHTING_TOGGLE));
@@ -881,7 +1072,7 @@ ZTEST(lighting, test_group_codec_and_validation) {
     };
     struct defy_lighting_group decoded;
     uint8_t bytes[DEFY_LIGHTING_GROUP_SIZE];
-    static const uint8_t expected[] = {3, DEFY_CONTROL_LIGHTING_GROUP, 4, 3, 2, 1, 5,
+    static const uint8_t expected[] = {4, DEFY_CONTROL_LIGHTING_GROUP, 4, 3, 2, 1, 5,
                                        0xa1, 0xa2, 0xa3, 0x78, 0x56, 0x34, 0x12, 0x04};
     BUILD_ASSERT(sizeof(expected) == DEFY_LIGHTING_GROUP_SIZE);
     zassert_ok(defy_lighting_group_encode(&group, bytes));

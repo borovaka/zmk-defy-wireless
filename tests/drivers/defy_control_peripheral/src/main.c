@@ -460,7 +460,7 @@ ZTEST(control_peripheral, test_lighting_rejects_malformed_writes_without_queuein
     zassert_equal(write_control(NULL, NULL, command, sizeof(command), 0, 0),
                   BT_GATT_ERR(BT_ATT_ERR_NOT_SUPPORTED));
     const uint8_t offsets[] = {0, 1, 2, 3, 7};
-    const uint8_t values[] = {1, DEFY_CONTROL_LIGHTING_ACK, 2, 0, 0};
+    const uint8_t values[] = {1, DEFY_CONTROL_LIGHTING_ACK, BIT(2), 0, 0};
     for (size_t i = 0; i < ARRAY_SIZE(offsets); i++) {
         zassert_ok(defy_lighting_control_encode(&state, DEFY_CONTROL_LIGHTING_SET, command));
         command[offsets[i]] = values[i];
@@ -548,7 +548,7 @@ ZTEST(control_peripheral, test_lighting_ack_reports_only_successful_applied_tupl
 }
 
 ZTEST(control_peripheral, test_lighting_group_is_kept_at_once_without_reply) {
-    const uint8_t command[] = {3, DEFY_CONTROL_LIGHTING_GROUP, 0x78, 0x56, 0x34, 0x12, 9,
+    const uint8_t command[] = {4, DEFY_CONTROL_LIGHTING_GROUP, 0x78, 0x56, 0x34, 0x12, 9,
                                0x10, 0x20, 0x30, 0x01, 0x02, 0x03, 0x04, 0x05};
     zassert_equal(sizeof(command), DEFY_LIGHTING_GROUP_SIZE);
     zassert_equal(write_control(NULL, NULL, command, sizeof(command), 0,
@@ -628,7 +628,7 @@ ZTEST(control_peripheral, test_lighting_state_refused_for_a_missing_group_is_not
     zassert_equal(request_state(&state), DEFY_LIGHTING_CONTROL_SIZE);
     apply_lighting_work(NULL);
     zassert_equal(read_lighting(NULL, NULL, data, sizeof(data), 0), DEFY_LIGHTING_CONTROL_SIZE);
-    const uint8_t expected[] = {3, DEFY_CONTROL_LIGHTING_ACK, 1, 123, 0, 0, 0, 2, 0, 0, 0,
+    const uint8_t expected[] = {4, DEFY_CONTROL_LIGHTING_ACK, 1, 123, 0, 0, 0, 2, 0, 0, 0,
                                 0, 0, 0, 0, 0, 0, 0x08, 0, 200};
     zassert_mem_equal(data, expected, sizeof(expected));
 }
@@ -713,7 +713,7 @@ ZTEST(control_peripheral, test_wake_codec_wire_format_and_roundtrip) {
     const struct defy_lighting_wake wake = {
         .side = 1, .from_sleep = true, .boot = 0x12345678, .age_ms = 0x90abcdef,
     };
-    const uint8_t expected[] = {3, 4, 1, 1, 0x78, 0x56, 0x34, 0x12,
+    const uint8_t expected[] = {4, 4, 1, 1, 0x78, 0x56, 0x34, 0x12,
                                0xef, 0xcd, 0xab, 0x90};
     uint8_t data[DEFY_LIGHTING_WAKE_SIZE];
     struct defy_lighting_wake decoded;
@@ -730,7 +730,7 @@ ZTEST(control_peripheral, test_wake_codec_rejects_malformed_payload_without_outp
     const struct defy_lighting_wake wake = {.side = 0, .boot = 7};
     uint8_t data[DEFY_LIGHTING_WAKE_SIZE + 1];
     const struct { uint8_t offset; uint8_t value; } invalid[] = {
-        {0, 2}, {0, 4}, {1, DEFY_CONTROL_LIGHTING_ACK}, {2, 2}, {3, 2}, {4, 0},
+        {0, 3}, {0, 5}, {1, DEFY_CONTROL_LIGHTING_ACK}, {2, 2}, {3, 2}, {4, 0},
     };
     struct defy_lighting_wake decoded = {.side = 1, .boot = 99};
     for (size_t i = 0; i < ARRAY_SIZE(invalid); i++) {

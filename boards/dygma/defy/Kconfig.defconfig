@@ -8,4 +8,8 @@ config ZMK_KEYBOARD_NAME
 config ZMK_SPLIT
     default y
 
+# SysTick runs from clk_sys, 48 MHz in defy.dtsi.
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+    default $(dt_node_int_prop_int,$(dt_nodelabel_path,clk_sys),clock-frequency)
+
 endif # BOARD_DEFY_LEFT || BOARD_DEFY_RIGHT

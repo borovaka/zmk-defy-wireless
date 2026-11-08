@@ -13,6 +13,7 @@
 #include <zephyr/ztest.h>
 
 #include <dygma/defy_battery.h>
+#include <dygma/defy_lighting.h>
 
 struct fake_device {
     enum pm_device_state state;
@@ -92,6 +93,7 @@ static enum action actions[32];
 static size_t action_count;
 static int transport_error, matrix_error, cancel_error, suspend_error;
 static int64_t idle_argument;
+static bool cable_argument;
 static bool pending_before_pm, pending_after_pm;
 static bool pm_started, suspend_matrix, disable_matrix_wake;
 static bool battery_overlay;
@@ -100,6 +102,16 @@ static const struct device *state_error_after_pm;
 static jmp_buf terminal;
 
 bool defy_half_leds_battery_active(void) { return battery_overlay; }
+
+/* The Neuron's last lighting state as the half applied it, if it has one. */
+static bool lighting_applied;
+static bool lighting_on_battery;
+
+bool defy_lighting_peripheral_get(struct defy_lighting_state *state) {
+    *state = (struct defy_lighting_state){.boot = lighting_applied ? 1 : 0,
+                                          .on_battery = lighting_on_battery};
+    return lighting_applied;
+}
 
 static int sample_error;
 static int charger_error;
@@ -124,9 +136,10 @@ static void record(enum action action) {
     actions[action_count++] = action;
 }
 
-int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms) {
+int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms, bool may_sleep) {
     record(PREPARE_TRANSPORT);
     idle_argument = min_idle_ms;
+    cable_argument = may_sleep;
     return transport_error;
 }
 
@@ -205,6 +218,8 @@ static void reset(void *fixture) {
     action_count = 0;
     transport_error = matrix_error = cancel_error = suspend_error = 0;
     idle_argument = 0;
+    cable_argument = false;
+    lighting_applied = lighting_on_battery = false;
     schedules = 0;
     scheduled_ms = 0;
     pending_before_pm = pending_after_pm = false;
@@ -289,6 +304,41 @@ ZTEST(defy_half_sleep, test_held_or_live_cable_or_recent_activity_veto) {
     EXPECT_ACTIONS(PREPARE_TRANSPORT);
     zassert_equal(idle_argument, 900000);
     zassert_equal(schedules, 1);
+    zassert_equal(scheduled_ms, 1000);
+}
+
+ZTEST(defy_half_sleep, test_cable_may_sleep_only_when_neuron_runs_on_battery) {
+    zassert_equal(run_poll(), ENTER_DORMANT);
+    zassert_false(cable_argument);
+
+    reset(NULL);
+    lighting_on_battery = true;
+    zassert_equal(run_poll(), ENTER_DORMANT);
+    zassert_false(cable_argument);
+
+    reset(NULL);
+    lighting_applied = true;
+    zassert_equal(run_poll(), ENTER_DORMANT);
+    zassert_false(cable_argument);
+
+    reset(NULL);
+    lighting_applied = lighting_on_battery = true;
+    zassert_equal(run_poll(), ENTER_DORMANT);
+    zassert_true(cable_argument);
+}
+
+ZTEST(defy_half_sleep, test_cable_permission_follows_each_poll_while_bluetooth_stops) {
+    lighting_applied = lighting_on_battery = true;
+    transport_error = -EINPROGRESS;
+    zassert_equal(run_poll(), 0);
+    zassert_true(cable_argument);
+    zassert_equal(scheduled_ms, 20);
+
+    lighting_on_battery = false;
+    transport_error = -EBUSY;
+    zassert_equal(run_poll(), 0);
+    zassert_false(cable_argument);
+    EXPECT_ACTIONS(PREPARE_TRANSPORT, PREPARE_TRANSPORT);
     zassert_equal(scheduled_ms, 1000);
 }
 

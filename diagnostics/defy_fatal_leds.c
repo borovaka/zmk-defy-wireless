@@ -83,8 +83,8 @@ BUILD_ASSERT((LED_CONFIG >> 4) == 2, "the configuration must scan SW1-SW9, as DO
 /* A bound on every wait for the SPI, so that a stopped clock cannot hang the handler. */
 #define SPIN_LIMIT 100000
 
-/* About a millisecond of the loop in hold() at 125 MHz. */
-#define LOOPS_PER_MS 25000
+/* About a millisecond of the loop in hold(), five cycles a pass. */
+#define LOOPS_PER_MS (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / 5000)
 
 static void hold(uint32_t ms) {
     for (uint32_t i = 0; i < ms * LOOPS_PER_MS; i++) {
@@ -117,7 +117,8 @@ static void write_reg(uint8_t page, uint8_t reg, uint8_t value) {
     sio_hw->gpio_set = BIT(PIN_LEDS_CS);
 }
 
-/* Pins as Dygma's bootloader sets them: every chip select high, SDB high, SPI0 at about 0.5 MHz. */
+/* Pins as Dygma's bootloader sets them: every chip select high, SDB high. SPI0 at clk_peri / 250,
+ * 192 kHz. */
 static void setup(void) {
     static const uint32_t bus_pins[] = {DT_FOREACH_CHILD(DT_PINCTRL_BY_NAME(BUS, default, 0),
                                                          BUS_GROUP)};

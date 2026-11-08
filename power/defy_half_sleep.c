@@ -15,6 +15,7 @@
 #include <dygma/defy_half_leds.h>
 #include <dygma/defy_half_power.h>
 #include <dygma/defy_hybrid.h>
+#include <dygma/defy_lighting.h>
 #include <zmk/pm.h>
 
 #define POLL_MS 1000
@@ -75,6 +76,16 @@ static bool charger_active(void) {
             charger.state == DEFY_BATTERY_CHARGE_DONE);
 }
 
+/* Whether a live cable may let the half sleep: the Neuron's last lighting
+ * state has on_battery, which it sets with no computer, and one cable in or no
+ * USB power. With no state yet, the cable keeps the half awake. */
+static bool neuron_on_battery(void) {
+    struct defy_lighting_state state;
+
+    return IS_ENABLED(CONFIG_DEFY_LIGHTING) && defy_lighting_peripheral_get(&state) &&
+           state.on_battery;
+}
+
 static void sleep_poll(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(sleep_work, sleep_poll);
 
@@ -87,7 +98,8 @@ static void sleep_poll(struct k_work *work) {
         schedule_poll();
         return;
     }
-    int err = defy_hybrid_peripheral_prepare_sleep(CONFIG_DEFY_HALF_SLEEP_TIMEOUT_MS);
+    int err = defy_hybrid_peripheral_prepare_sleep(CONFIG_DEFY_HALF_SLEEP_TIMEOUT_MS,
+                                                   neuron_on_battery());
 
     if (err < 0) {
         k_work_reschedule(&sleep_work, K_MSEC(err == -EINPROGRESS ? STOPPING_POLL_MS : POLL_MS));

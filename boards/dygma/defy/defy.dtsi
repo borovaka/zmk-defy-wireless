@@ -66,6 +66,45 @@
     };
 };
 
+/*
+ * clk_sys and clk_peri at 48 MHz instead of Zephyr's 125 MHz, which saves
+ * power while a half is awake. The VCO runs at 768 MHz, the lowest in the
+ * RP2040's 750-1600 MHz range that divides to 48 MHz: 12 MHz x 64 / 4 / 4.
+ * The SPI buses at 1 and 2 MHz and the underglow's 8 MHz PIO cycles divide
+ * 48 MHz evenly. Zephyr's clock driver also sets up the GPOUT clocks from
+ * PLL_SYS before it turns them off, so they cannot ask for more than it gives.
+ * SYS_CLOCK_HW_CYCLES_PER_SEC follows clk_sys, in Kconfig.defconfig.
+ */
+&pll_sys {
+    fb-div = <64>;
+    post-div1 = <4>;
+    post-div2 = <4>;
+};
+
+&clk_sys {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
+&clk_peri {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
+&clk_gpout0 {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
+&clk_gpout1 {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
+&clk_gpout2 {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
+&clk_gpout3 {
+    clock-frequency = <DT_FREQ_M(48)>;
+};
+
 &flash0 {
     /* ZB25VQ16, 2 MiB */
     reg = <0x10000000 DT_SIZE_M(2)>;

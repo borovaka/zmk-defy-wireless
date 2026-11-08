@@ -213,7 +213,10 @@ static void notify_snapshot(void) {
         int64_t now = k_uptime_get();
 
         if (data.snapshots > 0) {
-            data.max_snapshot_gap_ms = MAX(data.max_snapshot_gap_ms, now - data.last_snapshot_ms);
+            int64_t gap = now - data.last_snapshot_ms;
+
+            data.min_snapshot_gap_ms = MIN(data.min_snapshot_gap_ms, gap);
+            data.max_snapshot_gap_ms = MAX(data.max_snapshot_gap_ms, gap);
         }
         data.last_snapshot_ms = now;
         data.snapshots++;
@@ -284,6 +287,7 @@ int raise_zmk_split_peripheral_status_changed(struct zmk_split_peripheral_status
 void fake_links_reset(void) {
     k_mutex_lock(&lock, K_FOREVER);
     memset(&data, 0, sizeof(data));
+    data.min_snapshot_gap_ms = INT64_MAX;
     memset(reply, 0, sizeof(reply));
     defy_wired_rx_init(&receiver);
     cable_online = false;
@@ -350,6 +354,13 @@ void fake_bluetooth_connected(bool value) {
 void fake_bluetooth_slow_reports(bool value) {
     k_mutex_lock(&lock, K_FOREVER);
     slow_reports = value;
+    k_mutex_unlock(&lock);
+}
+
+void fake_bluetooth_reset_gaps(void) {
+    k_mutex_lock(&lock, K_FOREVER);
+    data.min_snapshot_gap_ms = INT64_MAX;
+    data.max_snapshot_gap_ms = 0;
     k_mutex_unlock(&lock);
 }
 

@@ -56,11 +56,13 @@ int defy_hybrid_central_set_maintenance(bool value);
 /*
  * For half sleep, in power/defy_half_sleep.c. prepare_sleep() quiesces the
  * half's transports once no key has been pressed for min_idle_ms, none is
- * held and the cable is down: 0 once they are, -EINPROGRESS while Bluetooth
- * stops, and -EBUSY or -ETIMEDOUT when the half stays awake.
+ * held and the cable is down, or up with cable_may_sleep and every key
+ * snapshot acknowledged: 0 once they are, -EINPROGRESS while Bluetooth
+ * stops, and -EBUSY or -ETIMEDOUT when the half stays awake. The policy sets
+ * cable_may_sleep while the Neuron reports that it runs on battery.
  * cancel_sleep() brings them back.
  */
-int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms);
+int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms, bool cable_may_sleep);
 void defy_hybrid_peripheral_cancel_sleep(void);
 
 #endif

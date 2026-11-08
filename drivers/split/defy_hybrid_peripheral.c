@@ -42,6 +42,7 @@ static int64_t last_key_activity_ms;
 static zmk_split_transport_peripheral_status_changed_cb_t status_callback;
 /* The status last reported to ZMK. */
 static struct zmk_split_transport_status published_status;
+/* When the next Bluetooth snapshot is due, under report_lock. */
 static int64_t next_snapshot_ms;
 
 static void update(struct k_work *work);
@@ -249,13 +250,26 @@ static inline bool restore_bluetooth(void) { return false; }
 static inline int prepare_bluetooth_stop(void) { return 0; }
 #endif
 
-static bool sleep_ready(int64_t min_idle_ms) {
+static bool is_enabled(void) {
     k_spinlock_key_t key = k_spin_lock(&state_lock);
-    bool idle = enabled && k_uptime_get() - last_key_activity_ms >= min_idle_ms &&
-                defy_wired_bitmap_empty(held_keys);
+    bool value = enabled;
+
+    k_spin_unlock(&state_lock, key);
+    return value;
+}
+
+/* No key held, and no key change for min_idle_ms. */
+static bool idle_for(int64_t now, int64_t min_idle_ms) {
+    k_spinlock_key_t key = k_spin_lock(&state_lock);
+    bool idle = now - last_key_activity_ms >= min_idle_ms && defy_wired_bitmap_empty(held_keys);
 
     k_spin_unlock(&state_lock, key);
     return idle;
+}
+
+/* Called with report_lock held, which keeps out key changes and enables. */
+static bool sleep_ready(int64_t min_idle_ms) {
+    return is_enabled() && idle_for(k_uptime_get(), min_idle_ms);
 }
 
 void defy_hybrid_peripheral_cancel_sleep(void) {
@@ -273,7 +287,7 @@ void defy_hybrid_peripheral_cancel_sleep(void) {
     k_mutex_unlock(&report_lock);
 }
 
-int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms) {
+int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms, bool cable_may_sleep) {
     if (min_idle_ms < 0) {
         return -EINVAL;
     }
@@ -286,7 +300,8 @@ int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms) {
         bool cabled = defy_wired_peripheral.api->get_status().connections !=
                       ZMK_SPLIT_TRANSPORT_CONNECTIONS_STATUS_DISCONNECTED;
 
-        err = cabled ? -EBUSY : prepare_bluetooth_stop();
+        /* A permitted cable keeps carrying keys while Bluetooth stops. */
+        err = cabled && !cable_may_sleep ? -EBUSY : prepare_bluetooth_stop();
     }
     if (!err) {
         k_spinlock_key_t key = k_spin_lock(&state_lock);
@@ -294,7 +309,7 @@ int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms) {
         quiescing = true;
         k_spin_unlock(&state_lock, key);
         k_work_cancel_delayable(&update_work);
-        err = defy_wired_peripheral_prepare_sleep();
+        err = defy_wired_peripheral_prepare_sleep(cable_may_sleep);
         if (!err && !sleep_ready(min_idle_ms)) {
             err = -EBUSY;
         }
@@ -306,22 +321,15 @@ int defy_hybrid_peripheral_prepare_sleep(int64_t min_idle_ms) {
     return err;
 }
 
-static bool is_enabled(void) {
-    k_spinlock_key_t key = k_spin_lock(&state_lock);
-    bool value = enabled;
-
-    k_spin_unlock(&state_lock, key);
-    return value;
-}
-
-static int status_poll_ms(int64_t now) {
-    k_spinlock_key_t key = k_spin_lock(&state_lock);
-    bool idle = now - last_key_activity_ms >= CONFIG_DEFY_HYBRID_IDLE_TIMEOUT_MS &&
-                defy_wired_bitmap_empty(held_keys);
-
-    k_spin_unlock(&state_lock, key);
-    return idle ? CONFIG_DEFY_HYBRID_IDLE_STATUS_POLL_MS
-                : CONFIG_DEFY_HYBRID_PERIPHERAL_POLL_MS;
+/*
+ * Called with report_lock and state_lock held, on a key change or an enable,
+ * which restart the idle timeout. A snapshot due at the idle interval comes
+ * forward to the active one, so a lost notification of the change is still
+ * put right within CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS.
+ */
+static void mark_active(int64_t now) {
+    last_key_activity_ms = now;
+    next_snapshot_ms = MIN(next_snapshot_ms, now + CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS);
 }
 
 static struct zmk_split_transport_status transport_status(void) {
@@ -393,8 +401,10 @@ static void publish_status(void) {
     published_status = current;
 }
 
-/* Notifies the Neuron of every held key at a fixed interval while Bluetooth
- * is connected, which puts its state right after a lost notification. */
+/* Notifies the Neuron of every held key while Bluetooth is connected, which
+ * puts its state right after a lost notification: every
+ * CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS, or every
+ * CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS once idle. */
 static void refresh_snapshot(bool active, bool bluetooth_connected) {
     if (!active || !bluetooth_connected || k_uptime_get() < next_snapshot_ms) {
         return;
@@ -404,7 +414,11 @@ static void refresh_snapshot(bool active, bool bluetooth_connected) {
     if (err < 0) {
         LOG_WRN("Split snapshot refresh failed (%d)", err);
     }
-    next_snapshot_ms = k_uptime_get() + CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS;
+    int64_t now = k_uptime_get();
+
+    next_snapshot_ms = now + (idle_for(now, CONFIG_DEFY_HYBRID_IDLE_TIMEOUT_MS)
+                                  ? CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS
+                                  : CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS);
 }
 
 static void schedule_update(bool bluetooth_connected) {
@@ -412,7 +426,9 @@ static void schedule_update(bool bluetooth_connected) {
         return;
     }
     int64_t now = k_uptime_get();
-    int delay_ms = status_poll_ms(now);
+    int delay_ms = idle_for(now, CONFIG_DEFY_HYBRID_IDLE_TIMEOUT_MS)
+                       ? CONFIG_DEFY_HYBRID_IDLE_STATUS_POLL_MS
+                       : CONFIG_DEFY_HYBRID_PERIPHERAL_POLL_MS;
 
     if (bluetooth_connected) {
         delay_ms = MIN(delay_ms, MAX(0, next_snapshot_ms - now));
@@ -478,7 +494,7 @@ static int set_enabled(bool value) {
     k_spinlock_key_t key = k_spin_lock(&state_lock);
 
     if (value && !enabled) {
-        last_key_activity_ms = k_uptime_get();
+        mark_active(k_uptime_get());
     }
     enabled = value;
     k_spin_unlock(&state_lock, key);
@@ -513,7 +529,7 @@ static int report_event(const struct zmk_split_transport_peripheral_event *event
 
         if (changed) {
             WRITE_BIT(held_keys[position / 8], position % 8, pressed);
-            last_key_activity_ms = k_uptime_get();
+            mark_active(k_uptime_get());
         }
         k_spin_unlock(&state_lock, key);
         if (changed) {

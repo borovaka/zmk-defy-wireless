@@ -8,6 +8,8 @@
 #include <zmk/usb.h>
 #include <dygma/defy_update_guard.h>
 
+#include "fake_uptime.h"
+
 static int test_configure(const struct gpio_dt_spec *spec, gpio_flags_t flags);
 static int test_get(const struct gpio_dt_spec *spec);
 static int test_schedule(struct k_work_delayable *work, k_timeout_t delay);
@@ -21,6 +23,7 @@ static int test_schedule(struct k_work_delayable *work, k_timeout_t delay);
 #undef gpio_pin_configure_dt
 #undef gpio_pin_get_dt
 #undef k_work_schedule
+#undef k_uptime_get
 
 #define LEFT DEFY_NEURON_CABLE_LEFT
 #define RIGHT DEFY_NEURON_CABLE_RIGHT
@@ -32,8 +35,10 @@ static enum zmk_usb_conn_state usb;
 static int configure_error[2];
 static unsigned int configures, reads, schedules;
 static int64_t scheduled_ms;
+static unsigned int power_changes;
 
 enum zmk_usb_conn_state zmk_usb_get_conn_state(void) { return usb; }
+void defy_lighting_central_power_changed(void) { power_changes++; }
 
 static int test_configure(const struct gpio_dt_spec *spec, gpio_flags_t flags) {
     size_t line = spec - lines;
@@ -63,6 +68,7 @@ static void level(uint8_t mask) {
 static void tick(void) {
     sample(&sample_work.work);
     zassert_equal(scheduled_ms, SAMPLE_MS);
+    now += SAMPLE_MS;
 }
 
 static void start(void) {
@@ -78,6 +84,18 @@ static void settle(uint8_t mask) {
     zassert_equal(defy_neuron_cables(), mask);
 }
 
+/* Samples for the settle time from the first sample, then once more, which finds it on battery. */
+static void assert_settles_on_battery(void) {
+    unsigned int changes = power_changes;
+    for (int ms = 0; ms < ON_BATTERY_SETTLE_MS; ms += SAMPLE_MS) {
+        tick();
+        zassert_false(defy_neuron_on_battery(), "at %d ms", ms);
+    }
+    tick();
+    zassert_true(defy_neuron_on_battery());
+    zassert_equal(power_changes, changes + 1);
+}
+
 static void snapshot(uint8_t out[DEFY_NEURON_DOCK_STATUS_SIZE]) {
     zassert_equal(defy_neuron_dock_status(out, DEFY_NEURON_DOCK_STATUS_SIZE),
                   DEFY_NEURON_DOCK_STATUS_SIZE);
@@ -89,6 +107,9 @@ static void before(void *fixture) {
     defy_update_release(DEFY_UPDATE_NEURON);
     atomic_clear(&status);
     sampled = false;
+    battery_since = -1;
+    now = 0;
+    power_changes = 0;
     usb = ZMK_USB_CONN_NONE;
     configure_error[0] = configure_error[1] = 0;
     configures = reads = schedules = 0;
@@ -245,6 +266,102 @@ ZTEST(neuron_dock, test_nothing_is_reported_before_init) {
     snapshot(out);
     const uint8_t expected[] = {1, 0, 0, 0, ZMK_USB_CONN_POWERED, DEFY_NEURON_CHARGER, 0, 0};
     zassert_mem_equal(out, expected, sizeof(expected));
+    usb = ZMK_USB_CONN_NONE;
+    zassert_equal(defy_neuron_place(), DEFY_NEURON_ALONE);
+    zassert_false(defy_neuron_on_battery());
+}
+
+ZTEST(neuron_dock, test_docked_or_alone_is_on_battery_after_the_settle_time) {
+    /* Alone, alone with both cables, docked, and one cable on a charger, which reads docked. */
+    static const struct {
+        uint8_t cables;
+        enum zmk_usb_conn_state usb;
+    } places[] = {
+        {0, ZMK_USB_CONN_NONE},
+        {LEFT | RIGHT, ZMK_USB_CONN_NONE},
+        {RIGHT, ZMK_USB_CONN_NONE},
+        {LEFT, ZMK_USB_CONN_POWERED},
+    };
+    for (unsigned int i = 0; i < ARRAY_SIZE(places); i++) {
+        before(NULL);
+        start();
+        usb = ZMK_USB_CONN_HID;
+        settle(places[i].cables);
+        zassert_false(defy_neuron_on_battery());
+        usb = places[i].usb;
+        assert_settles_on_battery();
+        /* A steady place changes nothing. */
+        for (int n = 0; n < 40; n++) {
+            tick();
+        }
+        zassert_true(defy_neuron_on_battery(), "place %u", i);
+        zassert_equal(power_changes, 1, "place %u", i);
+    }
+}
+
+ZTEST(neuron_dock, test_a_computer_within_the_settle_time_starts_it_again) {
+    /* Before USB enumerates, a Neuron on a computer reads alone. */
+    start();
+    level(LEFT | RIGHT);
+    for (int ms = 0; ms < ON_BATTERY_SETTLE_MS; ms += SAMPLE_MS) {
+        tick();
+    }
+    usb = ZMK_USB_CONN_POWERED;
+    tick();
+    usb = ZMK_USB_CONN_HID;
+    for (int n = 0; n < 40; n++) {
+        tick();
+    }
+    zassert_false(defy_neuron_on_battery());
+    zassert_equal(power_changes, 0);
+    usb = ZMK_USB_CONN_NONE;
+    assert_settles_on_battery();
+}
+
+ZTEST(neuron_dock, test_a_computer_or_a_charger_ends_on_battery_at_once) {
+    start();
+    usb = ZMK_USB_CONN_HID;
+    settle(LEFT);
+    usb = ZMK_USB_CONN_NONE;
+    assert_settles_on_battery();
+    usb = ZMK_USB_CONN_HID;
+    tick();
+    zassert_false(defy_neuron_on_battery());
+    zassert_equal(power_changes, 2);
+    for (int n = 0; n < 40; n++) {
+        tick();
+    }
+    zassert_equal(power_changes, 2);
+
+    settle(0);
+    usb = ZMK_USB_CONN_NONE;
+    assert_settles_on_battery();
+    usb = ZMK_USB_CONN_POWERED;
+    tick();
+    zassert_false(defy_neuron_on_battery());
+    zassert_equal(power_changes, 4);
+}
+
+ZTEST(neuron_dock, test_a_half_updater_hold_never_sets_on_battery) {
+    start();
+    settle(LEFT);
+    zassert_true(defy_update_claim(DEFY_UPDATE_HALVES));
+    for (int n = 0; n < 40; n++) {
+        tick();
+    }
+    zassert_false(defy_neuron_on_battery());
+    zassert_equal(power_changes, 0);
+    defy_update_release(DEFY_UPDATE_HALVES);
+    assert_settles_on_battery();
+
+    /* A hold keeps it on, and a computer still ends it. */
+    zassert_true(defy_update_claim(DEFY_UPDATE_HALVES));
+    tick();
+    zassert_true(defy_neuron_on_battery());
+    usb = ZMK_USB_CONN_HID;
+    tick();
+    zassert_false(defy_neuron_on_battery());
+    zassert_equal(power_changes, 2);
 }
 
 ZTEST_SUITE(neuron_dock, NULL, NULL, before, NULL, NULL);

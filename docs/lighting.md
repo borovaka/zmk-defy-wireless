@@ -155,7 +155,7 @@ When the preferred output is not ready, keys go to the other one if it is. The o
 
 ### Matching builds
 
-The halves and the Neuron must run the same build. When their lighting or host feedback versions differ, each drops the other's messages of that kind. The chooser and the overlay then do not light, although the chooser still opens on the Neuron and takes its keys until it closes. A lighting mismatch also keeps the halves cyan once connected, and the toggle and the idle darkness do not reach them. Typing and the battery display keep working. `defy-installer update` writes matching builds. [Lighting messages](automatic-transports.md#lighting-messages) gives the versions and layouts.
+The halves and the Neuron must run the same build. When their lighting or host feedback versions differ, each drops the other's messages of that kind. The chooser and the overlay then do not light, although the chooser still opens on the Neuron and takes its keys until it closes. A lighting mismatch also keeps the halves cyan once connected, and the toggle and the idle darkness do not reach them. Without the state, a half's live cable keeps it awake even when the Neuron [runs on battery](power-and-wake.md#on-the-dock), as in any build with `CONFIG_DEFY_LIGHTING` off on either side or `CONFIG_DEFY_NEURON_DOCK` off on the Neuron. Typing and the battery display keep working. `defy-installer update` writes matching builds. [Lighting messages](automatic-transports.md#lighting-messages) gives the versions and layouts.
 
 ## Keymap bindings
 

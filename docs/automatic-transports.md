@@ -8,7 +8,7 @@ Each half keeps its key state current on both links. The Neuron uses a half's ca
 
 | Timing | Value |
 | --- | ---: |
-| Bluetooth snapshot from each half | every 100 ms |
+| Bluetooth snapshot from each half | every 100 ms, 400 ms when idle |
 | Cable poll, connected | every 2 ms |
 | Cable probe, nothing connected | every 20 ms |
 | Neuron gives up on a cable | 250 ms without valid data |
@@ -17,7 +17,7 @@ Each half keeps its key state current on both links. The Neuron uses a half's ca
 
 After 30 s without a key change, a half polls less often; see [connected idle](power-and-wake.md#connected-idle). The values are deadlines. Work-queue scheduling can stretch them.
 
-When a cable drops, a known Bluetooth link has 200 ms to deliver a snapshot newer than the loss. Keys held in both stay pressed across the handoff. Without one, the Neuron releases the half's keys. A full event queue can drop Bluetooth transitions, but the last snapshot still puts the keys right. A cable queue overflow resends the current keys instead of the missed history.
+When a cable drops, a known Bluetooth link has 200 ms to deliver a snapshot newer than the loss. Keys held in both stay pressed across the handoff. Without one, the Neuron releases the half's keys; an idle half holds none, so an idle snapshot that misses the 200 ms costs nothing. After an idle half reconnects over Bluetooth, its first snapshot can take up to 400 ms. A full event queue can drop Bluetooth transitions, but the last snapshot still puts the keys right. A cable queue overflow resends the current keys instead of the missed history.
 
 If the radio does not start after the driver's bounded attempts, the half still works over its cable.
 
@@ -50,7 +50,7 @@ Key frames are 32 bytes:
 A half may set only its own 35 positions.
 
 - **Half.** It queues up to 32 snapshots and resends the oldest until the Neuron acknowledges it. Sequence 0 with the sync flag starts a session. It drops the connection after 100 ms without a valid acknowledgement. A full queue discards the history and starts a new session with the current keys, so a long interruption can lose taps but never leaves a key stuck.
-- **Neuron.** The cable worker hands each changed snapshot to the router's 128-entry queue, which the system work queue turns into ZMK key events. The Neuron acknowledges a frame only after its snapshot is queued; when the queue is full, the frame goes unacknowledged and the half sends it again. An unexpected session or sequence gets a resync request, and duplicates do not repeat a change. The worker checks for a silent cable at least every 10 ms and gives up after 250 ms without valid data. A ZMK error on a key event is logged, and the event is not replayed. A second half claiming a side that is already connected is refused until the first one times out.
+- **Neuron.** The cable worker hands each changed snapshot to the router's 128-entry queue, which the system work queue turns into ZMK key events. The Neuron acknowledges a frame only after its snapshot is queued; when the queue is full, the frame goes unacknowledged and the half sends it again. An unexpected session or sequence gets a resync request, and duplicates do not repeat a change. The worker checks for a silent cable at least every 10 ms and gives up after 250 ms without valid data. With no cable connected and both ports armed, it waits for a transfer instead. A ZMK error on a key event is logged, and the event is not replayed. A second half claiming a side that is already connected is refused until the first one times out.
 - **Reconnection** sends the current keys. Taps made while disconnected are not replayed.
 
 Frames that start with `DL` carry the Neuron's commands to a half, the battery display, the lighting state, its [key groups](lighting.md#key-colours) and host feedback, and a half's lighting acknowledgements back. A transfer carries one command in place of an acknowledgement the half already has, so a state that names n groups the half has not confirmed follows them about 2n transfers later; see [lighting messages](#lighting-messages). Frames that start with `DB` carry battery telemetry from a half in place of an idle keep-alive. Frames that start with `DV` carry the half's [version report](versions.md#the-halves-report) the same way, once after the link comes up and then every 60 s.
@@ -63,11 +63,11 @@ The lighting state, its key groups and host feedback carry the same fields over 
 
 | Message | Version, opcode | Over Bluetooth | In a `DL` frame |
 | --- | --- | --- | --- |
-| Lighting state from the Neuron, and a half's acknowledgement | 3; 2, and 3 for the acknowledgement | 20 bytes: the version, the opcode, the on flag, the boot and the revision as 32-bit values, the colour of the per-key LEDs and the colour of the underglow, three bytes each in red, green, blue order, the groups it names as 16 bits, and the brightness | The on flag as the flag; the boot and the revision in bytes 12 to 19; the colours, the groups and the brightness in bytes 20 to 28 |
-| Key group | 3; 6 | 15 bytes: the version, the opcode, the boot as a 32-bit value, the group's number, its colour at full strength, and five bytes with a bit for each of the half's 35 per-key LEDs, in LED order | Flag 0; the boot and the other fields in bytes 12 to 24 |
+| Lighting state from the Neuron, and a half's acknowledgement | 4; 2, and 3 for the acknowledgement | 20 bytes: the version, the opcode, the flags, the boot and the revision as 32-bit values, the colour of the per-key LEDs and the colour of the underglow, three bytes each in red, green, blue order, the groups it names as 16 bits, and the brightness | The flags as the flag; the boot and the revision in bytes 12 to 19; the colours, the groups and the brightness in bytes 20 to 28 |
+| Key group | 4; 6 | 15 bytes: the version, the opcode, the boot as a 32-bit value, the group's number, its colour at full strength, and five bytes with a bit for each of the half's 35 per-key LEDs, in LED order | Flag 0; the boot and the other fields in bytes 12 to 24 |
 | Host feedback | 3; 5 | 20 bytes: the version, the opcode, the boot and a sequence as 32-bit values, the display's remaining time in milliseconds as 16 bits, the selected profile, the flags, the profile count, the profiles cleared since the Neuron started, and the paired and connected profiles as 16-bit masks | Flag 0; bytes 2 to 19 of the message in bytes 12 to 29 |
 
-The halves' wake report is at lighting version 3 too. A group has no acknowledgement of its own. The Neuron counts a half's groups as delivered once the half has acknowledged a state that names them, and until then sends any others again before each state it sends. Each side drops a lighting or host feedback message whose version is not its own; see [matching builds](lighting.md#matching-builds).
+The state's flags are bit 0, lights on, and bit 1, the Neuron [runs on battery](power-and-wake.md#on-the-dock); a state with any other bit set is refused. The halves' wake report is at lighting version 4 too. Host feedback keeps its own version. A group has no acknowledgement of its own. The Neuron counts a half's groups as delivered once the half has acknowledged a state that names them, and until then sends any others again before each state it sends. Each side drops a lighting or host feedback message whose version is not its own; see [matching builds](lighting.md#matching-builds).
 
 ## Bluetooth link
 

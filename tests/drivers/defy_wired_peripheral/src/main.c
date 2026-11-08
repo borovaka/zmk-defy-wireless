@@ -490,10 +490,10 @@ ZTEST(defy_wired_peripheral, test_recent_resync_ack_vetoes_until_reply_expires) 
     k_mutex_lock(&lock, K_FOREVER);
     central.online = false;
     k_mutex_unlock(&lock);
-    zassert_equal(defy_wired_peripheral_prepare_sleep(), -EBUSY);
+    zassert_equal(defy_wired_peripheral_prepare_sleep(false), -EBUSY);
     zassert_false(is_connected());
     k_sleep(K_MSEC(CONFIG_DEFY_WIRED_PERIPHERAL_TIMEOUT_MS + 5));
-    zassert_ok(defy_wired_peripheral_prepare_sleep());
+    zassert_ok(defy_wired_peripheral_prepare_sleep(false));
     defy_wired_peripheral_cancel_sleep();
 }
 
@@ -1169,6 +1169,75 @@ ZTEST(defy_wired_peripheral, test_version_goes_again_when_the_link_comes_back) {
     k_mutex_unlock(&lock);
     k_sleep(K_MSEC(1000));
     zassert_equal(report_count(), 2);
+}
+
+ZTEST(defy_wired_peripheral, test_permitted_sleep_ignores_live_cable_but_not_held_key) {
+    zassert_equal(defy_wired_peripheral_prepare_sleep(false), -EBUSY);
+    zassert_ok(key_event(28, true));
+    await_received(2);
+    zassert_equal(defy_wired_peripheral_prepare_sleep(true), -EBUSY);
+    zassert_ok(key_event(28, false));
+    await_received(3);
+    k_sleep(K_MSEC(10));
+    zassert_true(is_connected());
+    zassert_equal(defy_wired_peripheral_prepare_sleep(false), -EBUSY);
+    zassert_ok(defy_wired_peripheral_prepare_sleep(true));
+    size_t before = exchange_count();
+
+    k_sleep(K_MSEC(20));
+    zassert_equal(exchange_count(), before);
+    defy_wired_peripheral_cancel_sleep();
+    await_next_exchange();
+    zassert_ok(key_event(14, true));
+    await_received(4);
+    zassert_ok(key_event(14, false));
+    await_received(5);
+    k_mutex_lock(&lock, K_FOREVER);
+    zassert_equal(central.sessions[4], central.sessions[0]);
+    k_mutex_unlock(&lock);
+}
+
+ZTEST(defy_wired_peripheral, test_permitted_sleep_waits_for_unacknowledged_snapshots) {
+    k_mutex_lock(&lock, K_FOREVER);
+    central.dropped_replies = 8;
+    k_mutex_unlock(&lock);
+    zassert_ok(key_event(14, true));
+    zassert_ok(key_event(14, false));
+    zassert_equal(defy_wired_peripheral_prepare_sleep(true), -EBUSY);
+    await_received(3);
+    k_sleep(K_MSEC(40));
+    zassert_true(is_connected());
+    zassert_ok(defy_wired_peripheral_prepare_sleep(true));
+    k_mutex_lock(&lock, K_FOREVER);
+    zassert_equal(central.receiver.bitmap[1], 0);
+    k_mutex_unlock(&lock);
+    defy_wired_peripheral_cancel_sleep();
+}
+
+ZTEST(defy_wired_peripheral, test_cancel_after_permitted_sleep_resynchronizes_dropped_cable) {
+    zassert_ok(key_event(14, true));
+    zassert_ok(key_event(14, false));
+    await_received(3);
+    k_sleep(K_MSEC(10));
+    zassert_ok(defy_wired_peripheral_prepare_sleep(true));
+    size_t before = exchange_count();
+
+    k_sleep(K_MSEC(NEURON_CABLE_TIMEOUT_MS + 10));
+    zassert_equal(exchange_count(), before);
+    /* The Neuron drops the silent cable, though the reply it armed before stays. */
+    k_mutex_lock(&lock, K_FOREVER);
+    uint32_t old_session = central.receiver.session;
+
+    defy_wired_rx_init(&central.receiver);
+    k_mutex_unlock(&lock);
+    defy_wired_peripheral_cancel_sleep();
+    zassert_ok(key_event(28, true));
+    await_received(4);
+    await_connection(true);
+    k_mutex_lock(&lock, K_FOREVER);
+    zassert_not_equal(central.sessions[3], old_session);
+    zassert_equal(central.received[3][3], BIT(4));
+    k_mutex_unlock(&lock);
 }
 
 ZTEST_SUITE(defy_wired_peripheral, NULL, NULL, before, NULL, NULL);

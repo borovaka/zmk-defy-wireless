@@ -31,6 +31,7 @@ static struct zmk_position_state_changed keymap_event;
 static uint32_t test_random(void) { return 0x12345678; }
 static int test_reschedule(struct k_work_delayable *work, k_timeout_t delay);
 enum defy_neuron_place defy_neuron_place(void) { return place; }
+bool defy_neuron_on_battery(void) { return false; }
 bool zmk_ble_profile_is_open(uint8_t index) { return !(paired & BIT(index)); }
 bool zmk_ble_profile_is_connected(uint8_t index) { return connected & BIT(index); }
 bool zmk_ble_active_profile_is_connected(void) {

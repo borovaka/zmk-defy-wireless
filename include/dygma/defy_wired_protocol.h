@@ -83,7 +83,7 @@ void defy_wired_encode(const struct defy_wired_packet *packet,
  *    2  version
  *    3  opcode
  *    4  side
- *    5  the lighting state's enabled flag, 0 in other messages
+ *    5  the lighting state's flags, 0 in other messages
  *    6  0, 0
  *    8  session, 32 bits
  *   12  the message's own fields, then zeros up to the CRC

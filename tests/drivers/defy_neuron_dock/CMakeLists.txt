@@ -6,6 +6,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(defy_neuron_dock_test)
 
 target_sources(app PRIVATE src/main.c ${DEFY_ROOT}/bootloader/defy_update_guard.c)
-target_include_directories(app PRIVATE ${DEFY_ZMK_APP}/include)
-target_compile_definitions(app PRIVATE CONFIG_DEFY_HALF_UPDATER=1)
+target_include_directories(app PRIVATE ${DEFY_ZMK_APP}/include ${DEFY_ROOT}/tests/drivers/common)
+# The lighting is faked: main.c counts the dock's calls to it.
+target_compile_definitions(app PRIVATE CONFIG_DEFY_HALF_UPDATER=1 CONFIG_DEFY_LIGHTING=1)
 defy_test_zmk_hid(HKRO)

@@ -4,13 +4,15 @@
  * The hybrid central's watch over ZMK's Bluetooth split connections: it
  * follows each half's discovery and key subscription, takes its key
  * snapshots, disconnects a half that stops reporting or that the hybrid
- * central rejected, and keeps the split diagnostics (opcode 8).
+ * central rejected, keeps the split diagnostics (opcode 8) and chooses how
+ * fast the split central scans for a missing half.
  * docs/ble-input-recovery.md describes the recovery.
  */
 
 #include <errno.h>
 #include <string.h>
 
+#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -208,6 +210,65 @@ static void check_peers_work(struct k_work *work) {
 
 static K_WORK_DEFINE(health_work, check_peers_work);
 
+BUILD_ASSERT(CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_WINDOW_MS <=
+                 CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_INTERVAL_MS,
+             "a scan window fits in its interval");
+
+/* The split central's scan for a missing half. The fast one is
+ * BT_LE_SCAN_PASSIVE's, a 30 ms window every 60 ms. */
+static const struct bt_le_scan_param fast_scan =
+    BT_LE_SCAN_PARAM_INIT(BT_LE_SCAN_TYPE_PASSIVE, BT_LE_SCAN_OPT_FILTER_DUPLICATE,
+                          BT_GAP_SCAN_FAST_INTERVAL, BT_GAP_SCAN_FAST_WINDOW);
+static const struct bt_le_scan_param slow_scan =
+    BT_LE_SCAN_PARAM_INIT(BT_LE_SCAN_TYPE_PASSIVE, BT_LE_SCAN_OPT_FILTER_DUPLICATE,
+                          BT_GAP_MS_TO_SCAN_INTERVAL(CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_INTERVAL_MS),
+                          BT_GAP_MS_TO_SCAN_WINDOW(CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_WINDOW_MS));
+/* The uptime at which the scan turns slow, the first time after start-up. */
+static int64_t scan_fast_until = CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+
+static int64_t scan_fast_remaining(void) {
+    k_spinlock_key_t key = k_spin_lock(&ble_health_lock);
+    int64_t remaining = scan_fast_until - k_uptime_get();
+    k_spin_unlock(&ble_health_lock, key);
+    return remaining;
+}
+
+static void scan_slow_work(struct k_work *work);
+
+static K_WORK_DELAYABLE_DEFINE(scan_deadline, scan_slow_work);
+
+/* Restarts a running scan slow once the fast period has ended. */
+static void scan_slow_work(struct k_work *work) {
+    ARG_UNUSED(work);
+    int64_t remaining = scan_fast_remaining();
+    if (remaining > 0) {
+        k_work_schedule(&scan_deadline, K_MSEC(remaining));
+    } else {
+        defy_split_central_rescan();
+    }
+}
+
+const struct bt_le_scan_param *defy_hybrid_ble_scan_param(void) {
+    int64_t remaining = scan_fast_remaining();
+    if (remaining <= 0) {
+        return &slow_scan;
+    }
+    k_work_schedule(&scan_deadline, K_MSEC(remaining));
+    return &fast_scan;
+}
+
+void defy_hybrid_ble_scan_fast(void) {
+    k_spinlock_key_t key = k_spin_lock(&ble_health_lock);
+    int64_t now = k_uptime_get();
+    bool slow = now >= scan_fast_until;
+    scan_fast_until = now + CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS;
+    k_spin_unlock(&ble_health_lock, key);
+    k_work_reschedule(&scan_deadline, K_MSEC(CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS));
+    if (slow) {
+        defy_split_central_rescan();
+    }
+}
+
 int defy_hybrid_ble_set_maintenance(bool value) {
     int err = k_mutex_lock(&health_io_lock, K_MSEC(500));
     if (err) {
@@ -224,6 +285,10 @@ int defy_hybrid_ble_set_maintenance(bool value) {
     }
     k_spin_unlock(&ble_health_lock, key);
     k_mutex_unlock(&health_io_lock);
+    if (!value) {
+        /* The half updater restarts the halves, which may pair again. */
+        defy_hybrid_ble_scan_fast();
+    }
     return 0;
 }
 
@@ -270,6 +335,9 @@ void defy_hybrid_ble_clear_hold_off(void) {
         peers[i].hold_ms = 0;
     }
     k_spin_unlock(&ble_health_lock, key);
+    /* New halves pair from undirected advertising, which a slow scan finds
+     * later. */
+    defy_hybrid_ble_scan_fast();
 }
 
 int64_t defy_hybrid_ble_hold_off(uint8_t slot) {
@@ -592,6 +660,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
+    bool split = false;
     k_spinlock_key_t key = k_spin_lock(&ble_health_lock);
     for (size_t i = 0; i < ARRAY_SIZE(diagnostics); i++) {
         if (diagnostics[i].conn == conn) {
@@ -599,12 +668,19 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
             diagnostics[i].disconnect_count++;
             diagnostics[i].disconnect_reason = reason;
             diagnostics[i].phase = DEFY_HYBRID_BLE_IDLE;
+            split = true;
         }
     }
     k_spin_unlock(&ble_health_lock, key);
     struct hybrid_ble_peer *peer = peer_for_conn(conn);
     if (peer) {
         forget_peer(peer);
+    }
+    if (split) {
+        /* The half may be back soon, after a restart or a recovery
+         * disconnect. ZMK's callback runs first and may have started the
+         * scan slow. */
+        defy_hybrid_ble_scan_fast();
     }
 }
 

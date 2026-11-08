@@ -109,9 +109,15 @@ static void split_central_process_connection(struct bt_conn *conn) {
 static void status_handler(struct k_work *work) { ARG_UNUSED(work); }
 K_WORK_DEFINE(notify_status_work, status_handler);
 
+/* Stand-ins for the hybrid central's fast and slow scans. */
+static const struct bt_le_scan_param fast_scan = {.window = 1}, slow_scan = {.window = 2};
+static const struct bt_le_scan_param *scan_param, *started_param;
+
+const struct bt_le_scan_param *defy_hybrid_ble_scan_param(void) { return scan_param; }
+
 int bt_le_scan_start(const struct bt_le_scan_param *param, bt_le_scan_cb_t cb) {
-    ARG_UNUSED(param);
     ARG_UNUSED(cb);
+    started_param = param;
     scan_calls++;
     if (scan_result == 0) {
         host_scanning = true;
@@ -231,6 +237,8 @@ static void before(void *fixture) {
     conn_state = BT_CONN_STATE_CONNECTING;
     start_hook = NULL;
     create_hook = NULL;
+    scan_param = &fast_scan;
+    started_param = NULL;
     is_enabled = true;
 }
 
@@ -475,6 +483,84 @@ ZTEST(scan_recovery, test_failed_cancel_is_retried) {
     zassert_equal(disconnect_calls, 2);
     zassert_equal(peripherals[0].state, PERIPHERAL_SLOT_STATE_OPEN);
     await_scan(2);
+}
+
+ZTEST(scan_recovery, test_rescan_restarts_a_running_scan_once_with_new_parameters) {
+    zassert_ok(start_scanning());
+    zassert_equal_ptr(started_param, &fast_scan);
+    scan_param = &slow_scan;
+    defy_split_central_rescan();
+    zassert_equal(scan_calls, 1);
+    await_scan(2);
+    zassert_equal(stop_calls, 1);
+    zassert_equal_ptr(started_param, &slow_scan);
+    zassert_true(is_scanning);
+    k_sleep(K_MSEC(600));
+    zassert_equal(scan_calls, 2);
+}
+
+ZTEST(scan_recovery, test_rescan_needs_a_running_scan) {
+    for (int i = 0; i < 2; i++) {
+        peripherals[i].state = PERIPHERAL_SLOT_STATE_CONNECTED;
+        peripherals[i].conn = (struct bt_conn *)&conn_tokens[i];
+    }
+    zassert_ok(start_scanning());
+    defy_split_central_rescan();
+    zassert_false(k_work_delayable_is_pending(&scan_retry_work));
+    memset(peripherals, 0, sizeof(peripherals));
+    zassert_ok(start_scanning());
+    zassert_ok(split_central_bt_set_enabled(false));
+    defy_split_central_rescan();
+    zassert_false(k_work_delayable_is_pending(&scan_retry_work));
+    zassert_false(scan_restart);
+    zassert_ok(split_central_bt_set_enabled(true));
+    k_sleep(K_MSEC(600));
+    zassert_equal(scan_calls, 2);
+    zassert_equal(stop_calls, 1);
+}
+
+ZTEST(scan_recovery, test_rescan_waits_for_pending_retry_and_scan_operation) {
+    zassert_ok(start_scanning());
+    retry_scanning();
+    defy_split_central_rescan();
+    k_sleep(K_MSEC(100));
+    zassert_equal(scan_calls, 1);
+    await_scan(2);
+    zassert_equal(stop_calls, 1);
+
+    atomic_set(&scan_operation, 1);
+    defy_split_central_rescan();
+    k_sleep(K_MSEC(100));
+    zassert_equal(scan_calls, 2);
+    zassert_true(k_work_delayable_remaining_get(&scan_retry_work) > 0);
+    atomic_clear(&scan_operation);
+    await_scan(3);
+    zassert_equal(stop_calls, 2);
+    k_sleep(K_MSEC(600));
+    zassert_equal(scan_calls, 3);
+}
+
+ZTEST(scan_recovery, test_rescan_cancelled_by_a_connection_restarts_at_the_current_pace) {
+    zassert_ok(start_scanning());
+    zassert_equal_ptr(started_param, &fast_scan);
+    scan_param = &slow_scan;
+    defy_split_central_rescan();
+    /* The half's report stops the scan before the queued restart runs, and cancels it. */
+    zassert_true(advertise());
+    zassert_equal(create_calls, 1);
+    zassert_equal(stop_calls, 1);
+    zassert_false(is_scanning);
+    zassert_false(k_work_delayable_is_pending(&scan_retry_work));
+    conn_state = BT_CONN_STATE_CONNECTED;
+    split_central_connected(peripherals[0].conn, 0);
+    zassert_equal(process_calls, 1);
+    zassert_equal(scan_calls, 2);
+    zassert_equal_ptr(started_param, &slow_scan);
+    zassert_true(is_scanning);
+    zassert_false(scan_restart);
+    k_sleep(K_MSEC(600));
+    zassert_equal(scan_calls, 2);
+    zassert_equal(stop_calls, 1);
 }
 
 ZTEST_SUITE(scan_recovery, NULL, NULL, before, NULL, NULL);

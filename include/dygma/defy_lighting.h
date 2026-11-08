@@ -10,7 +10,7 @@
 #include <dygma/defy_control.h>
 
 /* The version of the lighting state, its acknowledgement, the groups and the wake report. */
-#define DEFY_LIGHTING_VERSION 3u
+#define DEFY_LIGHTING_VERSION 4u
 #define DEFY_LIGHTING_CONTROL_SIZE 20u
 #define DEFY_LIGHTING_GROUP_SIZE 15u
 #define DEFY_LIGHTING_WAKE_SIZE 12u
@@ -39,12 +39,14 @@ struct defy_lighting_colour {
  * LEDs and one for the underglow, both already scaled by the brightness.
  * Black leaves those LEDs dark. groups names the groups drawn over the key
  * colour, one bit each, and level is the brightness that scales their colours,
- * 1 to 255.
+ * 1 to 255. on_battery is the dock's defy_neuron_on_battery(): no computer, and
+ * one cable in or no USB power. A cable then keeps no half awake.
  */
 struct defy_lighting_state {
     uint32_t boot;
     uint32_t revision;
     bool enabled;
+    bool on_battery;
     struct defy_lighting_colour keys;
     struct defy_lighting_colour underglow;
     uint16_t groups;
@@ -99,9 +101,29 @@ struct defy_lighting_wake {
 static inline bool defy_lighting_equal(const struct defy_lighting_state *a,
                                        const struct defy_lighting_state *b) {
     return a->boot == b->boot && a->revision == b->revision && a->enabled == b->enabled &&
-           defy_lighting_colour_equal(a->keys, b->keys) &&
+           a->on_battery == b->on_battery && defy_lighting_colour_equal(a->keys, b->keys) &&
            defy_lighting_colour_equal(a->underglow, b->underglow) && a->groups == b->groups &&
            a->level == b->level;
+}
+
+/* The state's flags, as a control message and a 'DL' frame carry them. */
+#define DEFY_LIGHTING_FLAG_ON (1u << 0)
+#define DEFY_LIGHTING_FLAG_ON_BATTERY (1u << 1)
+#define DEFY_LIGHTING_FLAGS (DEFY_LIGHTING_FLAG_ON | DEFY_LIGHTING_FLAG_ON_BATTERY)
+
+static inline uint8_t defy_lighting_flags_put(const struct defy_lighting_state *state) {
+    return (state->enabled ? DEFY_LIGHTING_FLAG_ON : 0) |
+           (state->on_battery ? DEFY_LIGHTING_FLAG_ON_BATTERY : 0);
+}
+
+/* Fills the flags in, or returns false for a bit that is not one of them. */
+static inline bool defy_lighting_flags_get(uint8_t flags, struct defy_lighting_state *state) {
+    if (flags & ~DEFY_LIGHTING_FLAGS) {
+        return false;
+    }
+    state->enabled = (flags & DEFY_LIGHTING_FLAG_ON) != 0;
+    state->on_battery = (flags & DEFY_LIGHTING_FLAG_ON_BATTERY) != 0;
+    return true;
 }
 
 /* The colours as a control message and a 'DL' frame carry them: keys, then
@@ -242,6 +264,8 @@ void defy_lighting_retry_stop(struct defy_lighting_retry *retry);
 
 /* The Neuron's lighting state, in lighting/defy_lighting_central.c. */
 bool defy_lighting_central_get(struct defy_lighting_state *state);
+/* The dock's defy_neuron_on_battery() changed: sends the state with it. */
+void defy_lighting_central_power_changed(void);
 /*
  * The group with index for the half on side, from the keymap, under the boot
  * of the Neuron's states; -ENOENT when there is no such group, -EAGAIN before

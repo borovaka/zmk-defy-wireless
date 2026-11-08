@@ -11,3 +11,15 @@ config DEFY_RP2040_FACTORY_HANDOFF
       bootloader leaves its watchdog running, which the reset hook stops
       before Zephyr starts. With DEFY_FATAL_RECOVERY the hook also runs
       defy_fatal_recovery_boot(), which counts quick faults.
+
+config DEFY_RP2040_USB_CLOCKS_OFF
+    bool "Defy RP2040 USB PLL off"
+    default y
+    depends on BOARD_DEFY_LEFT || BOARD_DEFY_RIGHT
+    depends on CLOCK_CONTROL_RPI_PICO
+    depends on !USB_DEVICE_STACK && !USB_DEVICE_STACK_NEXT && !ADC && !COUNTER && !RTC
+    help
+      Turns off the USB PLL, which runs at 48 MHz, and the USB, ADC and
+      RTC clocks it drives, after Zephyr's clock driver has started them.
+      The halves use none of them, so this saves power while a half is
+      awake.

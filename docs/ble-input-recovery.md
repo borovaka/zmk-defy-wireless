@@ -49,7 +49,26 @@ The halves advertise from fixed addresses, but their attempts take the same path
 
 ## Dropped advertising reports
 
-The scan uses `BT_LE_SCAN_PASSIVE`, which turns on the controller's duplicate filter, so each address is reported once per scan. The Neuron drops a report when a half advertises while its old connection still holds the slot, when the report arrives during another scan operation, and while a rejected half is held off. Each of these sets `scan_restart`, and the next `start_scanning()` stops and restarts a running scan, which clears the controller's duplicate list. Turning the filter off would also work, but then every advertisement from every nearby device would reach the host while a half is missing.
+The scan is passive with the controller's duplicate filter on, at either [pace](#scan-pace), so each address is reported once per scan. The Neuron drops a report when a half advertises while its old connection still holds the slot, when the report arrives during another scan operation, and while a rejected half is held off. Each of these sets `scan_restart`, and the next `start_scanning()` stops and restarts a running scan, which clears the controller's duplicate list. Turning the filter off would also work, but then every advertisement from every nearby device would reach the host while a half is missing.
+
+## Scan pace
+
+The Neuron scans for a missing half for as long as a slot is open, which is all the time its halves sleep. `defy_hybrid_ble_scan_param()` in `drivers/split/defy_hybrid_ble.c` gives `start_scanning()` one of two paces:
+
+| Pace | Window, interval | When |
+| --- | --- | --- |
+| Fast | 30 ms every 60 ms, as `BT_LE_SCAN_PASSIVE` | For 60 s after the Neuron starts, after a half's Bluetooth link drops, after a half's cable drops while that half has no Bluetooth link, after the half updater's maintenance ends and after a split pairing reset |
+| Slow | 20 ms every 640 ms | Otherwise |
+
+The slow pace cuts the radio's receive time from half to about 3%. A bonded half that wakes from sleep restarts and sends high-duty directed advertising, at most 3.75 ms apart, for up to 1.28 s. That usually spans one or two slow windows, and either window finds the half. The Neuron's radio also serves its other connections and can shorten or skip a window for them. If the windows miss it, the half falls back to low-duty directed advertising every 100 to 150 ms, as a half that pairs afresh advertises, and a slow scan takes about 3 to 6 s on average to find that.
+
+A cable drop counts only when that half has no Bluetooth link, which `apply_wired()` in `drivers/split/defy_hybrid_central.c` checks once, when the cable link goes down. It covers a docked half lifted off the dock seconds after it woke, before a slow window found it. Without the fast scan, that half would wait on low-duty advertising and lose keys meanwhile. A docked half that goes to sleep stops Bluetooth first and its cable shortly after, so the cable drop only extends the fast period that the Bluetooth stop began.
+
+When the fast period ends, or starts again while a slow scan runs, `defy_split_central_rescan()` in the patch sets `scan_restart` and runs `start_scanning()` from the retry work item, so the running scan restarts once with the new pace. A pending retry keeps its delay, and a scan operation in progress makes the restart wait for the usual retry.
+
+Connection attempts do not use this pace. ZMK stops its scan before it creates a connection, and `start_scanning()` does not scan while a slot is connecting, so Zephyr's own scan for the attempt runs at its fast parameters.
+
+`CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS`, `CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_INTERVAL_MS` and `CONFIG_DEFY_HYBRID_BLE_SCAN_SLOW_WINDOW_MS` set the three values. Keep the slow interval well under 1.28 s.
 
 ## Identity conflicts
 
@@ -65,6 +84,7 @@ ZMK's `split_central_bt_set_enabled(false)` disconnects only connected slots. Th
 
 - sends the key subscription and discovery through the hybrid central, which follows them for its health check;
 - hands each peripheral event to the hybrid central, which maps the slot to its side;
+- takes the scan's parameters from the hybrid central, and adds `defy_split_central_rescan()` for a change of [pace](#scan-pace);
 - initialises the split central one priority after ZMK's Bluetooth, at `UTIL_INC(CONFIG_ZMK_BLE_INIT_PRIORITY)`. The patched copy is a module source, and module sources link first. At the same priority it would register its settings before Bluetooth set up the settings subsystem, which would discard them.
 
-`tests/drivers/defy_ble_scan` runs the patched scanner against a fake controller that filters duplicates, one report per address per scan start. `tests/drivers/defy_hybrid_central` covers the watchdog and the encryption retry.
+`tests/drivers/defy_ble_scan` runs the patched scanner against a fake controller that filters duplicates, one report per address per scan start. `tests/drivers/defy_hybrid_central` covers the watchdog, the encryption retry, the scan pace and when the service work runs.

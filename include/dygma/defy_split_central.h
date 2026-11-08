@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 
+#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/kernel.h>
@@ -47,5 +48,19 @@ int defy_hybrid_central_peripheral_event(uint8_t source,
 /* Milliseconds before the half on a slot, whose identity the hybrid central
  * rejected, may reconnect: the scanner holds the slot off until then. */
 int64_t defy_hybrid_ble_hold_off(uint8_t slot);
+
+/* The parameters of the scan for a missing half: BT_LE_SCAN_PASSIVE's for
+ * CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS after start-up, a split disconnection,
+ * a cable loss without a Bluetooth link, the end of maintenance or a split
+ * pairing reset, and a slower scan after that. A fast answer also schedules
+ * defy_split_central_rescan() for when the fast period ends. */
+const struct bt_le_scan_param *defy_hybrid_ble_scan_param(void);
+
+/* The patched central.c's own, which the hybrid central calls. */
+
+/* Restarts a running scan from the system work queue, after a pending retry or
+ * scan operation, so that it takes defy_hybrid_ble_scan_param() again. Does
+ * nothing while split Bluetooth is disabled or no scan runs. */
+void defy_split_central_rescan(void);
 
 #endif

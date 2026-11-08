@@ -54,18 +54,28 @@ int defy_hybrid_central_ble_update(uint8_t slot, uint32_t epoch, bool connected,
  * hold-off that doubles with each rejection. */
 void defy_hybrid_ble_peer_rejected(uint8_t slot, uint32_t epoch);
 /* Ends both slots' hold-offs and starts their doubling again, for a split
- * pairing reset, after which each slot belongs to a new half. */
+ * pairing reset, after which each slot belongs to a new half. Also starts a
+ * fast scan, as new halves pair from undirected advertising. */
 void defy_hybrid_ble_clear_hold_off(void);
 /* Queues the disconnect of a half overdue for a key snapshot or rejected. */
 void defy_hybrid_ble_check_health(int64_t now);
+/* Scans fast for CONFIG_DEFY_HYBRID_BLE_SCAN_FAST_MS from now, after anything
+ * that makes a half likely to connect soon, and restarts a slow scan fast. */
+void defy_hybrid_ble_scan_fast(void);
 /* Each link's part of defy_hybrid_central_set_maintenance(): 0, or -EAGAIN
- * when its lock stays held for 500 ms. */
+ * when its lock stays held for 500 ms. The end of maintenance starts a fast
+ * scan, as the half updater restarts the halves. */
 int defy_hybrid_ble_set_maintenance(bool value);
 int defy_wired_central_set_maintenance(bool value);
 
-/* The cable's part of defy_hybrid_peripheral_prepare_sleep() and
- * _cancel_sleep(). */
-int defy_wired_peripheral_prepare_sleep(void);
+/*
+ * The cable's part of defy_hybrid_peripheral_prepare_sleep() and
+ * _cancel_sleep(). A held key keeps the half awake. So does a live cable, or
+ * a reply within CONFIG_DEFY_WIRED_PERIPHERAL_TIMEOUT_MS, unless
+ * cable_may_sleep; then only a key snapshot the Neuron has not acknowledged
+ * on a live cable does.
+ */
+int defy_wired_peripheral_prepare_sleep(bool cable_may_sleep);
 void defy_wired_peripheral_cancel_sleep(void);
 
 #endif

@@ -21,6 +21,7 @@ struct fake_link_snapshot {
     unsigned int zmk_connected_events;
     unsigned int zmk_disconnected_events;
     int64_t last_snapshot_ms;
+    int64_t min_snapshot_gap_ms;
     int64_t max_snapshot_gap_ms;
     bool bluetooth_enabled;
 };
@@ -33,6 +34,7 @@ void fake_cable_resume_transfer(void);
 void fake_bluetooth_available(bool value);
 void fake_bluetooth_connected(bool value);
 void fake_bluetooth_slow_reports(bool value);
+void fake_bluetooth_reset_gaps(void);
 struct fake_link_snapshot fake_links_snapshot(void);
 
 #if IS_ENABLED(CONFIG_DEFY_HALF_SLEEP)

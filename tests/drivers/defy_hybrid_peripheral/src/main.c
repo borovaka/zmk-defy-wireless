@@ -362,17 +362,121 @@ ZTEST(defy_hybrid_peripheral, test_held_key_prevents_idle_until_release_timeout)
     zassert_true(status_reads_during(200) <= 12);
 }
 
-ZTEST(defy_hybrid_peripheral, test_idle_preserves_snapshot_deadlines) {
-    connect_bluetooth();
-    wait_for_idle();
+/* Waits for the next Bluetooth notification, which is a snapshot while no key changes. */
+static void await_snapshot(void) {
+    size_t before = fake_links_snapshot().snapshots;
+    int64_t deadline = k_uptime_get() + CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS + 50;
+
+    while (fake_links_snapshot().snapshots == before && k_uptime_get() < deadline) {
+        k_sleep(K_MSEC(1));
+    }
+    zassert_true(fake_links_snapshot().snapshots > before, "no snapshot");
+}
+
+/* Waits for a snapshot, then checks that the next three follow it at the interval. */
+static void assert_snapshot_interval(int interval_ms) {
+    await_snapshot();
     size_t snapshots = fake_links_snapshot().snapshots;
 
-    k_sleep(K_MSEC(5 * CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS + 10));
+    fake_bluetooth_reset_gaps();
+    k_sleep(K_MSEC(3 * interval_ms + 10));
     struct fake_link_snapshot state = fake_links_snapshot();
 
-    zassert_true(state.snapshots - snapshots >= 5);
-    zassert_true(state.max_snapshot_gap_ms <= CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS + 5,
-                 "snapshot gap: %lld", state.max_snapshot_gap_ms);
+    zassert_equal(state.snapshots - snapshots, 3);
+    zassert_true(state.min_snapshot_gap_ms >= interval_ms - 5, "shortest gap: %lld",
+                 state.min_snapshot_gap_ms);
+    zassert_true(state.max_snapshot_gap_ms <= interval_ms + 5, "longest gap: %lld",
+                 state.max_snapshot_gap_ms);
+}
+
+ZTEST(defy_hybrid_peripheral, test_idle_slows_snapshots_on_schedule) {
+    connect_bluetooth();
+    zassert_ok(key_event(28, true));
+    zassert_ok(key_event(28, false));
+    assert_snapshot_interval(CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS);
+    wait_for_idle();
+    assert_snapshot_interval(CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS);
+    zassert_equal(fake_links_snapshot().notified_keys[3], 0);
+    zassert_equal(atomic_get(&disconnected_events), 0);
+}
+
+ZTEST(defy_hybrid_peripheral, test_held_key_keeps_active_snapshots_past_idle_timeout) {
+    connect_bluetooth();
+    zassert_ok(key_event(28, true));
+    wait_for_idle();
+    assert_snapshot_interval(CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS);
+    zassert_equal(fake_links_snapshot().notified_keys[3], BIT(4));
+    zassert_ok(key_event(28, false));
+}
+
+ZTEST(defy_hybrid_peripheral, test_first_key_change_after_idle_brings_snapshot_forward) {
+    connect_bluetooth();
+    wait_for_idle();
+    /* After this snapshot, the next idle one is a full idle interval away. */
+    await_snapshot();
+    zassert_ok(key_event(28, true));
+    zassert_ok(key_event(28, false));
+    int64_t released = fake_links_snapshot().last_snapshot_ms;
+
+    await_snapshot();
+    int64_t gap = fake_links_snapshot().last_snapshot_ms - released;
+
+    zassert_true(gap <= CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS + 5, "snapshot after %lld ms",
+                 gap);
+}
+
+ZTEST(defy_hybrid_peripheral, test_enable_after_idle_brings_snapshot_forward) {
+    connect_bluetooth();
+    wait_for_idle();
+    /* After this snapshot, the next idle one is a full idle interval away. */
+    await_snapshot();
+    zassert_ok(defy_hybrid_peripheral.api->set_enabled(false));
+    await_boolean(bluetooth_enabled, false);
+    int64_t reenabled = k_uptime_get();
+
+    zassert_ok(defy_hybrid_peripheral.api->set_enabled(true));
+    connect_bluetooth();
+    await_snapshot();
+    int64_t gap = fake_links_snapshot().last_snapshot_ms - reenabled;
+
+    zassert_true(gap <= CONFIG_DEFY_HYBRID_SNAPSHOT_INTERVAL_MS + 5, "snapshot after %lld ms",
+                 gap);
+}
+
+ZTEST(defy_hybrid_peripheral, test_idle_reconnect_sends_snapshot_when_due) {
+    connect_bluetooth();
+    wait_for_idle();
+    await_snapshot();
+    int64_t due = fake_links_snapshot().last_snapshot_ms +
+                  CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS;
+
+    /* A reconnect before the snapshot is due keeps its time. */
+    fake_bluetooth_connected(false);
+    k_sleep(K_MSEC(50));
+    fake_bluetooth_connected(true);
+    await_snapshot();
+    int64_t sent = fake_links_snapshot().last_snapshot_ms;
+
+    zassert_true(sent <= due + 5, "snapshot %lld ms after it was due", sent - due);
+
+    /* A reconnect after it is due sends it at once. */
+    fake_bluetooth_connected(false);
+    k_sleep(K_MSEC(CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS + 50));
+    size_t snapshots = fake_links_snapshot().snapshots;
+    int64_t reconnected = k_uptime_get();
+
+    fake_bluetooth_connected(true);
+    int64_t deadline = reconnected + 10;
+
+    while (fake_links_snapshot().snapshots == snapshots && k_uptime_get() < deadline) {
+        k_sleep(K_MSEC(1));
+    }
+    struct fake_link_snapshot state = fake_links_snapshot();
+
+    zassert_true(state.snapshots > snapshots, "no snapshot after the reconnect");
+    zassert_true(state.last_snapshot_ms - reconnected <= 5, "snapshot after %lld ms",
+                 state.last_snapshot_ms - reconnected);
+    zassert_equal(state.notified_keys[3], 0);
 }
 
 ZTEST(defy_hybrid_peripheral, test_idle_backend_callbacks_remain_prompt) {
@@ -436,7 +540,7 @@ static int prepare_result;
 
 static void prepare_from_work(struct k_work *work) {
     ARG_UNUSED(work);
-    prepare_result = defy_hybrid_peripheral_prepare_sleep(requested_idle_ms);
+    prepare_result = defy_hybrid_peripheral_prepare_sleep(requested_idle_ms, false);
     k_sem_give(&prepared);
 }
 static K_WORK_DEFINE(prepare_work, prepare_from_work);

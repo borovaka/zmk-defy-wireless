@@ -6,9 +6,9 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 
-/* The state: version, opcode, enabled, boot, revision, colours, then groups and level. */
+/* The state: version, opcode, flags, boot, revision, colours, then groups and level. */
 enum {
-    STATE_ENABLED = 2,
+    STATE_FLAGS = 2,
     STATE_BOOT = 3,
     STATE_REVISION = 7,
     STATE_COLOURS = 11,
@@ -34,7 +34,7 @@ int defy_lighting_control_encode(const struct defy_lighting_state *state, uint8_
     }
     data[0] = DEFY_LIGHTING_VERSION;
     data[1] = opcode;
-    data[STATE_ENABLED] = state->enabled;
+    data[STATE_FLAGS] = defy_lighting_flags_put(state);
     sys_put_le32(state->boot, data + STATE_BOOT);
     sys_put_le32(state->revision, data + STATE_REVISION);
     defy_lighting_colours_put(state, data + STATE_COLOURS);
@@ -48,15 +48,15 @@ int defy_lighting_control_decode(const void *data, size_t length, uint8_t opcode
         return -EINVAL;
     }
     const uint8_t *bytes = data;
-    if (bytes[0] != DEFY_LIGHTING_VERSION || bytes[1] != opcode || bytes[STATE_ENABLED] > 1 ||
-        (opcode != DEFY_CONTROL_LIGHTING_SET && opcode != DEFY_CONTROL_LIGHTING_ACK)) {
-        return -EPROTO;
-    }
     struct defy_lighting_state value = {
         .boot = sys_get_le32(bytes + STATE_BOOT),
         .revision = sys_get_le32(bytes + STATE_REVISION),
-        .enabled = bytes[STATE_ENABLED],
     };
+    if (bytes[0] != DEFY_LIGHTING_VERSION || bytes[1] != opcode ||
+        !defy_lighting_flags_get(bytes[STATE_FLAGS], &value) ||
+        (opcode != DEFY_CONTROL_LIGHTING_SET && opcode != DEFY_CONTROL_LIGHTING_ACK)) {
+        return -EPROTO;
+    }
     defy_lighting_colours_get(bytes + STATE_COLOURS, &value);
     defy_lighting_groups_get(bytes + STATE_GROUPS, &value);
     if (!defy_lighting_state_valid(&value)) {

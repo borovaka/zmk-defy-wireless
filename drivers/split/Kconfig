@@ -66,7 +66,20 @@ config DEFY_HYBRID_SNAPSHOT_INTERVAL_MS
     range 20 500
     help
       How often a half connected over Bluetooth notifies the Neuron of all
-      its key positions, which puts them right after a lost notification.
+      its key positions while keys are in use, which puts them right after
+      a lost notification.
+
+config DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS
+    int "Idle half Bluetooth snapshot interval in milliseconds"
+    default 400
+    range 20 450
+    help
+      How often an idle half connected over Bluetooth notifies the Neuron of
+      all its key positions. The Neuron stops using a half's Bluetooth link
+      after CONFIG_DEFY_HYBRID_BLE_TIMEOUT_MS without a snapshot, 1000 ms by
+      default. That option is set in the Neuron's build, where a half
+      cannot check it. Up to 450 ms, one lost snapshot still leaves the
+      next inside that timeout.
 
 endif
 
@@ -84,10 +97,43 @@ config DEFY_HYBRID_QUEUE_SIZE
 config DEFY_HYBRID_BLE_TIMEOUT_MS
     int "Neuron Bluetooth snapshot timeout in milliseconds"
     default 1000
-    range 500 5000
+    range 900 5000
     help
       How long the Neuron keeps using a half's last Bluetooth snapshot
-      without a new one before it releases the half's keys.
+      without a new one before it releases the half's keys. Keep it above
+      twice the halves' CONFIG_DEFY_HYBRID_IDLE_SNAPSHOT_INTERVAL_MS, 400 ms
+      by default, so that one lost idle snapshot does not count.
+
+config DEFY_HYBRID_BLE_SCAN_FAST_MS
+    int "Neuron fast scan period in milliseconds"
+    default 60000
+    range 1000 3600000
+    help
+      How long the Neuron scans fast for a missing half, a 30 ms window
+      every 60 ms, after it starts, after a half's Bluetooth link drops,
+      after a half's cable drops while it has no Bluetooth link, and after
+      the half updater's maintenance or a split pairing reset. It then
+      scans slowly until the next of these.
+
+config DEFY_HYBRID_BLE_SCAN_SLOW_INTERVAL_MS
+    int "Neuron slow scan interval in milliseconds"
+    default 640
+    range 3 10240
+    help
+      How often the Neuron's slow scan for a missing half opens a window.
+      Keep it well under 1.28 s. A bonded half that wakes advertises at
+      high duty cycle for at most 1.28 s, and a window usually falls within
+      that. If none does, the half advertises every 100 to 150 ms instead,
+      and the slow scan finds it after a few seconds. An interval of 60
+      with a window of 30 always scans fast.
+
+config DEFY_HYBRID_BLE_SCAN_SLOW_WINDOW_MS
+    int "Neuron slow scan window in milliseconds"
+    default 20
+    range 3 10240
+    help
+      How long each window of the slow scan listens. It must not exceed
+      the interval.
 
 config DEFY_HYBRID_HANDOFF_GRACE_MS
     int "Cable to Bluetooth handoff grace period in milliseconds"

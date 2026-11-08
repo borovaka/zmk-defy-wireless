@@ -14,9 +14,13 @@ config DEFY_HALF_SLEEP
       Puts an idle half into the RP2040's DORMANT state, in place of ZMK's
       own sleep: Bluetooth shut down and the radio powered off, the LED
       drivers suspended, every clock stopped. A key press restarts the half.
-      A half stays awake while a key is held, its cable link is up, the
-      battery display shows, or its last battery sample reports charging or
-      charge complete. docs/power-and-wake.md has the details.
+      A half stays awake while a key is held, the battery display shows, its
+      last battery sample reports charging or charge complete, or its cable
+      link is up, unless the Neuron reports that it runs on battery. The
+      lighting state carries that report, so a live cable always keeps the
+      half awake with DEFY_LIGHTING off on either side, DEFY_NEURON_DOCK off
+      on the Neuron, or a lighting version mismatch. docs/power-and-wake.md
+      has the details.
 
 config DEFY_HALF_SLEEP_TIMEOUT_MS
     int "Defy half inactivity before dormant sleep (ms)"

@@ -9,8 +9,9 @@ project(defy_lighting_test)
 
 # Listeners run in link order: consumer.c after the lighting, which main.c includes.
 target_sources(app PRIVATE src/main.c src/consumer.c
-                           ${DEFY_ROOT}/lighting/defy_lighting_protocol.c)
+                           ${DEFY_ROOT}/lighting/defy_lighting_protocol.c
+                           ${DEFY_ROOT}/drivers/split/defy_wired_protocol.c)
 target_include_directories(app PRIVATE ${DEFY_ROOT}/tests/drivers/common)
-# The looks and layer colours come from app.overlay.
-target_compile_definitions(app PRIVATE CONFIG_DEFY_HALF_LEDS=1)
+# The looks and layer colours come from app.overlay; main.c fakes the dock.
+target_compile_definitions(app PRIVATE CONFIG_DEFY_HALF_LEDS=1 CONFIG_DEFY_NEURON_DOCK=1)
 defy_test_zmk_events(position_state_changed.c layer_state_changed.c)

@@ -26,4 +26,8 @@ config DEFY_NEURON_DOCK
       Reads the halves' RUN lines to tell which cables are in and whether
       the Neuron is docked, on a computer, on a charger or alone. Lighting
       marks the docked state on the halves, and the half updater reports it.
-      See docs/automatic-transports.md.
+      After 5 s with no computer, and one cable in or no USB power, the
+      lighting state tells the halves that the Neuron runs on battery, so
+      that a cable keeps neither awake. Without this option a half's live
+      cable always keeps it awake. See docs/automatic-transports.md and
+      docs/power-and-wake.md.

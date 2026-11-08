@@ -546,6 +546,23 @@ ZTEST(defy_wired_central, test_invalid_transfers_cannot_reach_mux_or_extend_live
     assert_snapshot(1, DEFY_WIRED_LEFT, 10, false, NULL);
 }
 
+ZTEST(defy_wired_central, test_absent_cable_reports_its_loss_once) {
+    struct defy_wired_packet packet = data_packet(DEFY_WIRED_LEFT, 10, 0, -1);
+    exchange(0, &packet, 1);
+    service_ports(251);
+    zassert_equal(snapshot_count, 2);
+    assert_snapshot(1, DEFY_WIRED_LEFT, 10, false, NULL);
+    /* Failed and corrupt transfers on the empty socket report nothing more. */
+    for (int64_t at = 351; at < 2351; at += 100) {
+        transfer(0, &packet, -EIO, false);
+        service_ports(at);
+        transfer(0, &packet, DEFY_WIRED_FRAME_SIZE, true);
+        service_ports(at + 10);
+    }
+    zassert_equal(snapshot_count, 2);
+    zassert_false(ports[0].receiver.connected);
+}
+
 ZTEST(defy_wired_central, test_battery_requires_key_route_and_uses_physical_side_epoch) {
     battery_exchange(1, DEFY_WIRED_LEFT, 777, 1, false);
     zassert_equal(battery_routes[1].accept_attempts, 0);
@@ -1343,6 +1360,87 @@ ZTEST(defy_wired_central, test_version_follows_the_half_to_another_socket) {
     version_exchange(1, record, 252, false);
     zassert_equal(versions.received, 2);
     zassert_equal(versions.slot, 1);
+}
+
+/* Whether anything woke the worker since the last call. */
+static bool worker_woken(void) {
+    bool woken = k_sem_count_get(&worker_wake) != 0;
+    k_sem_reset(&worker_wake);
+    return woken;
+}
+
+ZTEST(defy_wired_central, test_worker_waits_for_an_event_while_nothing_is_connected) {
+    /* Both ports are armed and no cable is up: only a transfer brings work. */
+    zassert_true(K_TIMEOUT_EQ(service_ports(1), K_FOREVER));
+    zassert_true(fake_spi0.active);
+    zassert_true(fake_spi1.active);
+    worker_woken();
+    struct defy_wired_packet packet = data_packet(DEFY_WIRED_LEFT, 10, 0, -1);
+    transfer(1, &packet, DEFY_WIRED_FRAME_SIZE, false);
+    zassert_true(worker_woken());
+
+    /* A connected cable is watched for silence until it times out. */
+    zassert_true(K_TIMEOUT_EQ(service_ports(2), K_MSEC(SILENCE_CHECK_MS)));
+    zassert_true(ports[1].receiver.connected);
+    zassert_true(K_TIMEOUT_EQ(service_ports(251), K_MSEC(SILENCE_CHECK_MS)));
+    zassert_true(ports[1].receiver.connected);
+    zassert_true(K_TIMEOUT_EQ(service_ports(252), K_FOREVER));
+    zassert_false(ports[1].receiver.connected);
+    assert_snapshot(1, DEFY_WIRED_LEFT, 10, false, NULL);
+}
+
+ZTEST(defy_wired_central, test_worker_wakes_for_each_event_that_brings_work) {
+    struct defy_wired_packet packet = data_packet(DEFY_WIRED_LEFT, 10, 0, -1);
+    worker_woken();
+    transfer(0, &packet, DEFY_WIRED_FRAME_SIZE, false);
+    zassert_true(worker_woken());
+    service_ports(k_uptime_get());
+    zassert_false(worker_woken());
+    zassert_ok(defy_wired_battery_show(DEFY_WIRED_LEFT));
+    zassert_true(worker_woken());
+    struct defy_host_feedback request = feedback_request(1);
+    defy_wired_host_feedback_show(&request);
+    zassert_true(worker_woken());
+    defy_wired_lighting_changed();
+    zassert_true(worker_woken());
+    zassert_ok(set_enabled(false));
+    zassert_true(worker_woken());
+    global_maintenance = true;
+    zassert_ok(defy_wired_central_set_maintenance(true));
+    zassert_true(worker_woken());
+    zassert_ok(defy_wired_central_set_maintenance(false));
+    zassert_true(worker_woken());
+    global_maintenance = false;
+}
+
+ZTEST(defy_wired_central, test_worker_times_a_failed_arm_until_the_port_is_armed) {
+    struct defy_wired_packet packet = data_packet(DEFY_WIRED_LEFT, 10, 0, -1);
+    fake_spi0.arm_error = -EBUSY;
+    transfer(0, &packet, 8, false);
+    zassert_true(K_TIMEOUT_EQ(service_ports(1), K_MSEC(SILENCE_CHECK_MS)));
+    zassert_false(ports[0].armed);
+    zassert_false(ports[0].receiver.connected);
+    zassert_true(K_TIMEOUT_EQ(service_ports(11), K_FOREVER));
+    zassert_true(fake_spi0.active);
+}
+
+ZTEST(defy_wired_central, test_worker_times_the_end_of_the_hybrid_maintenance) {
+    struct defy_wired_packet packet = data_packet(DEFY_WIRED_LEFT, 10, 0, 0);
+    exchange(0, &packet, 1);
+    global_maintenance = true;
+    zassert_ok(defy_wired_central_set_maintenance(true));
+    transfer(0, &packet, DEFY_WIRED_FRAME_SIZE, false);
+    /* The end of this central's maintenance wakes the worker. */
+    zassert_true(K_TIMEOUT_EQ(service_ports(2), K_FOREVER));
+    zassert_false(fake_spi0.active);
+    zassert_true(fake_spi1.active);
+    zassert_ok(defy_wired_central_set_maintenance(false));
+    /* The hybrid central's ends after it without a wake, so the worker checks. */
+    zassert_true(K_TIMEOUT_EQ(service_ports(3), K_MSEC(SILENCE_CHECK_MS)));
+    zassert_false(fake_spi0.active);
+    global_maintenance = false;
+    zassert_true(K_TIMEOUT_EQ(service_ports(13), K_FOREVER));
+    zassert_true(fake_spi0.active);
 }
 
 ZTEST_SUITE(defy_wired_central, NULL, NULL, reset, NULL, NULL);

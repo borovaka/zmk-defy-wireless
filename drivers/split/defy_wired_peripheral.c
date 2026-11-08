@@ -215,7 +215,7 @@ void defy_wired_peripheral_cancel_sleep(void) {
     }
 }
 
-int defy_wired_peripheral_prepare_sleep(void) {
+int defy_wired_peripheral_prepare_sleep(bool cable_may_sleep) {
     k_spinlock_key_t key = k_spin_lock(&state_lock);
 
     quiescing = true;
@@ -227,9 +227,16 @@ int defy_wired_peripheral_prepare_sleep(void) {
         return -ETIMEDOUT;
     }
     key = k_spin_lock(&state_lock);
-    bool busy = connected ||
-                k_uptime_get() - last_reply_ms < CONFIG_DEFY_WIRED_PERIPHERAL_TIMEOUT_MS ||
-                !defy_wired_bitmap_empty(transmitter.bitmap);
+    /*
+     * A permitted live cable goes silent only once the Neuron has every
+     * snapshot, so that the keys it holds for this half stay right until it
+     * drops the silent cable, 250 ms later.
+     */
+    bool cable_busy = cable_may_sleep
+                          ? connected && transmitter.count != 0
+                          : connected || k_uptime_get() - last_reply_ms <
+                                             CONFIG_DEFY_WIRED_PERIPHERAL_TIMEOUT_MS;
+    bool busy = cable_busy || !defy_wired_bitmap_empty(transmitter.bitmap);
 
     k_spin_unlock(&state_lock, key);
     k_mutex_unlock(&io_lock);

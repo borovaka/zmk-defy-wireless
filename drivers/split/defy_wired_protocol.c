@@ -233,7 +233,7 @@ int defy_wired_lighting_encode(const struct defy_wired_lighting_command *command
         .version = DEFY_LIGHTING_VERSION,
         .opcode = command->opcode,
         .side = command->side,
-        .flag = command->state.enabled,
+        .flag = defy_lighting_flags_put(&command->state),
         .session = command->session,
     };
     defy_wired_control_put(&control, frame);
@@ -250,18 +250,18 @@ int defy_wired_lighting_decode(const uint8_t *frame, const struct defy_wired_con
     if (frame == NULL || control == NULL || command == NULL) {
         return -EINVAL;
     }
-    if (control->version != DEFY_LIGHTING_VERSION || control->flag > 1 ||
-        !zero_to_crc(frame, LIGHTING_END_OFFSET)) {
-        return -EPROTO;
-    }
     struct defy_wired_lighting_command decoded = {
         .opcode = control->opcode,
         .side = control->side,
         .session = control->session,
         .state = {.boot = defy_wired_get32(frame + LIGHTING_BOOT_OFFSET),
-                  .revision = defy_wired_get32(frame + LIGHTING_REVISION_OFFSET),
-                  .enabled = control->flag != 0},
+                  .revision = defy_wired_get32(frame + LIGHTING_REVISION_OFFSET)},
     };
+    if (control->version != DEFY_LIGHTING_VERSION ||
+        !defy_lighting_flags_get(control->flag, &decoded.state) ||
+        !zero_to_crc(frame, LIGHTING_END_OFFSET)) {
+        return -EPROTO;
+    }
     defy_lighting_colours_get(frame + LIGHTING_COLOURS_OFFSET, &decoded.state);
     defy_lighting_groups_get(frame + LIGHTING_GROUPS_OFFSET, &decoded.state);
     if (!lighting_valid(&decoded)) {

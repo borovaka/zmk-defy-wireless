@@ -4,6 +4,7 @@
 #include <dt-bindings/zmk/matrix_transform.h>
 #include <dygma/defy_control.h>
 #include <dygma/defy_lighting.h>
+#include <dygma/defy_neuron_dock.h>
 #include <dygma/defy_wired_protocol.h>
 #include <errno.h>
 #include <zephyr/kernel.h>
@@ -276,13 +277,15 @@ static struct defy_lighting_colour scaled(uint32_t colour) {
 }
 
 /*
- * Brings desired up to date with the preference, idleness, look, brightness and
- * layers, under the next revision; whether it changed. While the lights are
- * off, the colours wait, so that layer changes send nothing.
+ * Brings desired up to date with the preference, idleness, look, brightness,
+ * layers and power, under the next revision; whether it changed. While the
+ * lights are off, the colours wait, so that layer changes send nothing; the
+ * power is sent all the same.
  */
 static bool update_locked(void) {
     struct defy_lighting_state next = desired;
     next.enabled = preferred_enabled && !idle;
+    next.on_battery = IS_ENABLED(CONFIG_DEFY_NEURON_DOCK) && defy_neuron_on_battery();
     if (next.enabled) {
         const struct look *look = &looks[look_index];
         struct layer_colours colours = active_layer_colours();
@@ -401,7 +404,8 @@ void defy_lighting_central_wake(const struct defy_lighting_wake *wake) {
     }
 }
 
-static void layers_changed(void) {
+/* Takes a change of the layers or the power into desired, and sends it. */
+static void refresh(void) {
     k_spinlock_key_t key = k_spin_lock(&lighting_lock);
     bool changed = settings_ready && update_locked();
     k_spin_unlock(&lighting_lock, key);
@@ -410,9 +414,11 @@ static void layers_changed(void) {
     }
 }
 
+void defy_lighting_central_power_changed(void) { refresh(); }
+
 static int lighting_event(const zmk_event_t *eh) {
     if (as_zmk_layer_state_changed(eh)) {
-        layers_changed();
+        refresh();
         return ZMK_EV_EVENT_BUBBLE;
     }
     const struct zmk_position_state_changed *event = as_zmk_position_state_changed(eh);

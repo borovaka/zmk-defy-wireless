@@ -62,22 +62,23 @@ SPDX-License-Identifier: MIT
          if (err) {
              LOG_ERR("Discover failed(err %d)", err);
              return;
-@@ -781,20 +788,126 @@ static void split_central_process_connection(struct bt_conn *conn) {
+@@ -781,20 +788,138 @@ static void split_central_process_connection(struct bt_conn *conn) {
      start_scanning();
  }
  
 +/* Defy: scanning that recovers on its own. It replaces ZMK's stop_scanning()
 + * and start_scanning(): dropped reports restart the scan, failed scan
 + * operations retry from the work queue, connection attempts time out, and
-+ * a half rejected for an identity conflict is held off. See
++ * a half rejected for an identity conflict is held off.
++ * defy_hybrid_ble_scan_param() chooses a fast or a slow scan. See
 + * docs/ble-input-recovery.md in zmk-defy-wireless. */
 +
 +/* Set while a scan start or stop is in progress, so the two never overlap. */
 +static atomic_t scan_operation;
 +
-+/* BT_LE_SCAN_PASSIVE filters duplicates, so the controller reports each
-+ * address once per scan. After a report is dropped, start_scanning()
-+ * restarts a running scan so that half is reported again. */
++/* The scan filters duplicates, so the controller reports each address once
++ * per scan. After a report is dropped, start_scanning() restarts a running
++ * scan so that half is reported again. */
 +static bool scan_restart;
 +
 +static void scan_retry_handler(struct k_work *work) {
@@ -95,6 +96,17 @@ SPDX-License-Identifier: MIT
 +static void retry_scanning(void) {
 +    if (is_enabled) {
 +        k_work_reschedule(&scan_retry_work, K_MSEC(SCAN_RETRY_MS));
++    }
++}
++
++/* Restarts a running scan from the work queue, so that it takes
++ * defy_hybrid_ble_scan_param() again. k_work_schedule() leaves a pending
++ * retry's delay as it is, and start_scanning() retries during a scan
++ * operation. */
++void defy_split_central_rescan(void) {
++    if (is_enabled && is_scanning) {
++        scan_restart = true;
++        k_work_schedule(&scan_retry_work, K_NO_WAIT);
 +    }
 +}
 +
@@ -191,7 +203,7 @@ SPDX-License-Identifier: MIT
      LOG_DBG("Found the split service");
  
      // Reserve peripheral slot. Once the central has bonded to its peripherals,
-@@ -803,13 +916,24 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
+@@ -803,13 +928,24 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
      int slot_idx = reserve_peripheral_slot(addr);
      if (slot_idx < 0) {
          LOG_INF("Unable to reserve peripheral slot (err %d)", slot_idx);
@@ -216,7 +228,7 @@ SPDX-License-Identifier: MIT
          return false;
      }
  
-@@ -817,11 +941,12 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
+@@ -817,11 +953,12 @@ static bool split_central_eir_found(const bt_addr_le_t *addr) {
      struct bt_le_conn_param *param =
          BT_LE_CONN_PARAM(CONFIG_ZMK_SPLIT_BLE_PREF_INT, CONFIG_ZMK_SPLIT_BLE_PREF_INT,
                           CONFIG_ZMK_SPLIT_BLE_PREF_LATENCY, CONFIG_ZMK_SPLIT_BLE_PREF_TIMEOUT);
@@ -231,7 +243,7 @@ SPDX-License-Identifier: MIT
      }
  
      return false;
-@@ -882,41 +1007,61 @@ static void split_central_device_found(const bt_addr_le_t *addr, int8_t rssi, ui
+@@ -882,41 +1019,62 @@ static void split_central_device_found(const bt_addr_le_t *addr, int8_t rssi, ui
      }
  }
  
@@ -287,7 +299,9 @@ SPDX-License-Identifier: MIT
 +    }
 +    scan_restart = false;
      is_scanning = true;
-     int err = bt_le_scan_start(BT_LE_SCAN_PASSIVE, split_central_device_found);
+-    int err = bt_le_scan_start(BT_LE_SCAN_PASSIVE, split_central_device_found);
++    /* Defy: fast while a half is likely to connect soon, slow otherwise. */
++    int err = bt_le_scan_start(defy_hybrid_ble_scan_param(), split_central_device_found);
      if (err < 0) {
 +        is_scanning = false;
 +        if (err == -EALREADY) {
@@ -309,7 +323,7 @@ SPDX-License-Identifier: MIT
  }
  
  static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
-@@ -937,7 +1082,7 @@ static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
+@@ -937,7 +1095,7 @@ static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
  
          release_peripheral_slot_for_conn(conn);
  
@@ -318,7 +332,7 @@ SPDX-License-Identifier: MIT
          return;
      }
  
-@@ -1155,7 +1300,10 @@ static int zmk_split_bt_central_init(void) {
+@@ -1155,7 +1313,10 @@ static int zmk_split_bt_central_init(void) {
  #endif // IS_ENABLED(CONFIG_SETTINGS)
  }
  
@@ -330,7 +344,7 @@ SPDX-License-Identifier: MIT
  
  static int zmk_split_bt_central_listener_cb(const zmk_event_t *eh) {
      if (as_zmk_physical_layout_selection_changed(eh)) {
-@@ -1213,7 +1361,9 @@ static int split_central_bt_set_enabled(bool enabled) {
+@@ -1213,7 +1374,9 @@ static int split_central_bt_set_enabled(bool enabled) {
          }
  
          for (int i = 0; i < ZMK_SPLIT_BLE_PERIPHERAL_COUNT; i++) {
@@ -341,7 +355,7 @@ SPDX-License-Identifier: MIT
                  continue;
              }
  
-@@ -1285,6 +1435,7 @@ void peripheral_event_work_callback(struct k_work *work) {
+@@ -1285,6 +1448,7 @@ void peripheral_event_work_callback(struct k_work *work) {
      struct peripheral_event_wrapper ev;
      while (k_msgq_get(&peripheral_event_msgq, &ev, K_NO_WAIT) == 0) {
          LOG_DBG("Trigger key position state change of type %d", ev.event.type);

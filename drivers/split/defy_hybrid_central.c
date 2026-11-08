@@ -233,6 +233,11 @@ static void apply_wired(const struct hybrid_snapshot *snapshot) {
         state->await_ble_snapshot = true;
         state->handoff_deadline = snapshot->received + CONFIG_DEFY_HYBRID_HANDOFF_GRACE_MS;
         publish_selected(side);
+        if (ble_slot_for_side(side) < 0) {
+            /* With no Bluetooth link to take over, the half may be advertising
+             * for one, as when it leaves the dock soon after it woke. */
+            defy_hybrid_ble_scan_fast();
+        }
         return;
     }
     state->wired_connected = true;
@@ -440,6 +445,29 @@ static void process_snapshots(void) {
     update_status();
 }
 
+/*
+ * When the service work must run again without an event: by the next handoff
+ * deadline, and every SERVICE_INTERVAL_MS while a half is connected or a
+ * transport waits to start. A half counts from ZMK's Bluetooth connection, so
+ * the health check covers one that never reports. Otherwise K_FOREVER: a
+ * snapshot, a transport's status change, enabling and the end of maintenance
+ * submit the work.
+ */
+static k_timeout_t service_delay(int64_t now) {
+    bool needed = atomic_get(&connected_sides) != 0 ||
+                  bt_central.api->get_status().connections !=
+                      ZMK_SPLIT_TRANSPORT_CONNECTIONS_STATUS_DISCONNECTED ||
+                  (atomic_get(&enabled) && !(wired_started && ble_started));
+    int64_t delay = SERVICE_INTERVAL_MS;
+    for (uint8_t side = 0; side < ARRAY_SIZE(sides); side++) {
+        if (sides[side].await_ble_snapshot && sides[side].handoff_deadline > now) {
+            needed = true;
+            delay = MIN(delay, sides[side].handoff_deadline - now);
+        }
+    }
+    return needed ? K_MSEC(delay) : K_FOREVER;
+}
+
 static void service_work_cb(struct k_work *work) {
     ARG_UNUSED(work);
     if (defy_hybrid_central_is_maintenance()) {
@@ -466,13 +494,12 @@ static void service_work_cb(struct k_work *work) {
     process_snapshots();
     int64_t now = k_uptime_get();
     defy_hybrid_ble_check_health(now);
-    int64_t delay = SERVICE_INTERVAL_MS;
-    for (uint8_t side = 0; side < ARRAY_SIZE(sides); side++) {
-        if (sides[side].await_ble_snapshot && sides[side].handoff_deadline > now) {
-            delay = MIN(delay, sides[side].handoff_deadline - now);
-        }
+    k_timeout_t delay = service_delay(now);
+    if (K_TIMEOUT_EQ(delay, K_FOREVER)) {
+        k_work_cancel_delayable(&timeout_work);
+    } else {
+        k_work_reschedule(&timeout_work, delay);
     }
-    k_work_reschedule(&timeout_work, K_MSEC(delay));
 }
 
 static void timeout_work_cb(struct k_work *work) {

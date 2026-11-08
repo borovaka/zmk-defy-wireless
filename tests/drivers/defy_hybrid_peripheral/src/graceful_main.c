@@ -44,6 +44,7 @@ static bool cable_connected(void) {
 static bool bluetooth_enabled(void) { return fake_links_snapshot().bluetooth_enabled; }
 static bool bluetooth_disabled(void) { return !bluetooth_enabled(); }
 static bool gate_open(void) { return fake_bluetooth_advertising_allowed(); }
+static bool cable_key_held(void) { return fake_links_snapshot().cable_keys[3] == BIT(4); }
 
 static void await_condition(bool (*condition)(void)) {
     int64_t end = k_uptime_get() + 350;
@@ -76,11 +77,11 @@ static void before(void *fixture) {
     k_sleep(K_MSEC(CONFIG_DEFY_WIRED_PERIPHERAL_TIMEOUT_MS + 5));
 }
 
-static int await_prepare(void) {
+static int await_prepare(bool cable_may_sleep) {
     int err;
     int64_t end = k_uptime_get() + 350;
     do {
-        err = defy_hybrid_peripheral_prepare_sleep(0);
+        err = defy_hybrid_peripheral_prepare_sleep(0, cable_may_sleep);
         if (err != -EINPROGRESS) {
             return err;
         }
@@ -92,14 +93,14 @@ static int await_prepare(void) {
 ZTEST(graceful, test_disconnect_finishes_before_transport_quiesce) {
     connect_bluetooth();
     fake_bluetooth_delay_disconnect(true);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     await_condition(bluetooth_disabled);
     size_t exchanges = fake_links_snapshot().cable_exchanges;
     k_sleep(K_MSEC(30));
     zassert_true(fake_links_snapshot().cable_exchanges > exchanges);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     fake_bluetooth_connected(false);
-    zassert_ok(await_prepare());
+    zassert_ok(await_prepare(false));
     exchanges = fake_links_snapshot().cable_exchanges;
     k_sleep(K_MSEC(30));
     zassert_equal(fake_links_snapshot().cable_exchanges, exchanges);
@@ -112,28 +113,28 @@ ZTEST(graceful, test_pending_connection_without_connected_callback_vetoes_pm) {
     fake_bluetooth_connected(false);
     fake_bluetooth_delay_disconnect(true);
     fake_bluetooth_state(BT_CONN_STATE_CONNECTING);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     await_condition(bluetooth_disabled);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     fake_bluetooth_state(BT_CONN_STATE_CONNECTED);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     fake_bluetooth_state(BT_CONN_STATE_DISCONNECTING);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     fake_bluetooth_state(BT_CONN_STATE_DISCONNECTED);
-    zassert_ok(await_prepare());
+    zassert_ok(await_prepare(false));
 }
 
 ZTEST(graceful, test_key_cancels_inflight_stop_without_late_disable) {
     connect_bluetooth();
     fake_bluetooth_pause_stop();
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     zassert_ok(fake_bluetooth_await_stop());
     zassert_equal(fake_bluetooth_ref_count(), 1);
     unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
     k_sem_reset(&key_delivered);
     zassert_true(k_work_submit(&key_work) >= 0);
     zassert_ok(k_sem_take(&key_delivered, K_MSEC(100)));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
     k_sleep(K_MSEC(30));
     zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls);
     zassert_false(gate_open());
@@ -149,14 +150,14 @@ ZTEST(graceful, test_key_cancels_inflight_stop_without_late_disable) {
 ZTEST(graceful, test_stuck_hci_request_times_out_without_blocking_system_work) {
     connect_bluetooth();
     fake_bluetooth_pause_stop();
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     zassert_ok(fake_bluetooth_await_stop());
     size_t exchanges = fake_links_snapshot().cable_exchanges;
     k_sleep(K_MSEC(1010));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -ETIMEDOUT);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -ETIMEDOUT);
     zassert_true(fake_links_snapshot().cable_exchanges > exchanges);
     zassert_false(gate_open());
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
     fake_bluetooth_resume_stop();
     await_condition(gate_open);
     await_condition(bluetooth_enabled);
@@ -167,11 +168,11 @@ ZTEST(graceful, test_stuck_hci_request_times_out_without_blocking_system_work) {
 ZTEST(graceful, test_disconnect_timeout_restores_backend_once) {
     connect_bluetooth();
     fake_bluetooth_delay_disconnect(true);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     await_condition(bluetooth_disabled);
     unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
     k_sleep(K_MSEC(1010));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -ETIMEDOUT);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -ETIMEDOUT);
     await_condition(bluetooth_enabled);
     zassert_true(gate_open());
     zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 1);
@@ -183,8 +184,8 @@ ZTEST(graceful, test_failed_advertising_stop_restarts_enabled_backend) {
     connect_bluetooth();
     fake_bluetooth_stop_error(-EIO);
     unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
-    zassert_equal(await_prepare(), -EIO);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
+    zassert_equal(await_prepare(false), -EIO);
     await_condition(gate_open);
     zassert_true(bluetooth_enabled());
     zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 1);
@@ -197,13 +198,89 @@ ZTEST(graceful, test_failed_advertising_stop_restarts_enabled_backend) {
 ZTEST(graceful, test_live_cable_and_held_key_never_start_bluetooth_stop) {
     connect_bluetooth();
     zassert_ok(key_event(true));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EBUSY);
     zassert_ok(key_event(false));
     fake_cable_online(true);
     await_condition(cable_connected);
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
     zassert_equal(fake_bluetooth_stop_calls(), 0);
     zassert_true(gate_open());
+}
+
+ZTEST(graceful, test_permitted_live_cable_stops_bluetooth_then_quiesces) {
+    connect_bluetooth();
+    fake_cable_online(true);
+    await_condition(cable_connected);
+    fake_bluetooth_delay_disconnect(true);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EINPROGRESS);
+    await_condition(bluetooth_disabled);
+    size_t exchanges = fake_links_snapshot().cable_exchanges;
+    k_sleep(K_MSEC(30));
+    zassert_true(fake_links_snapshot().cable_exchanges > exchanges);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EINPROGRESS);
+    zassert_true(cable_connected());
+    fake_bluetooth_connected(false);
+    zassert_ok(await_prepare(true));
+    zassert_equal(fake_bluetooth_stop_calls(), 1);
+    exchanges = fake_links_snapshot().cable_exchanges;
+    k_sleep(K_MSEC(30));
+    zassert_equal(fake_links_snapshot().cable_exchanges, exchanges);
+    zassert_false(gate_open());
+
+    defy_hybrid_peripheral_cancel_sleep();
+    await_condition(gate_open);
+    await_condition(bluetooth_enabled);
+    zassert_ok(key_event(true));
+    await_condition(cable_key_held);
+    zassert_ok(key_event(false));
+}
+
+ZTEST(graceful, test_key_during_permitted_cable_stop_reaches_cable_and_restores_once) {
+    connect_bluetooth();
+    fake_cable_online(true);
+    await_condition(cable_connected);
+    fake_bluetooth_pause_stop();
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EINPROGRESS);
+    zassert_ok(fake_bluetooth_await_stop());
+    unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
+    zassert_ok(key_event(true));
+    await_condition(cable_key_held);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EBUSY);
+    k_sleep(K_MSEC(30));
+    zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls);
+    zassert_false(gate_open());
+    fake_bluetooth_resume_stop();
+    await_condition(gate_open);
+    await_condition(bluetooth_enabled);
+    zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 2);
+    k_sleep(K_MSEC(100));
+    zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 2);
+    zassert_equal(fake_bluetooth_stop_calls(), 1);
+    zassert_equal(fake_bluetooth_ref_count(), 0);
+    zassert_true(cable_connected());
+    zassert_true(cable_key_held());
+    zassert_ok(key_event(false));
+}
+
+ZTEST(graceful, test_withdrawn_cable_permission_cancels_stop_and_restores_bluetooth) {
+    connect_bluetooth();
+    fake_cable_online(true);
+    await_condition(cable_connected);
+    fake_bluetooth_delay_disconnect(true);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EINPROGRESS);
+    await_condition(bluetooth_disabled);
+    unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, true), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
+    await_condition(gate_open);
+    await_condition(bluetooth_enabled);
+    zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 1);
+    k_sleep(K_MSEC(100));
+    zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls + 1);
+    zassert_equal(fake_bluetooth_stop_calls(), 1);
+    zassert_equal(fake_bluetooth_ref_count(), 0);
+    zassert_true(cable_connected());
 }
 
 ZTEST(graceful, test_pending_advertiser_reference_is_retained_during_stop) {
@@ -211,12 +288,12 @@ ZTEST(graceful, test_pending_advertiser_reference_is_retained_during_stop) {
     fake_bluetooth_connected(false);
     fake_bluetooth_state(BT_CONN_STATE_CONNECTING);
     fake_bluetooth_pause_stop();
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     zassert_ok(fake_bluetooth_await_stop());
     zassert_equal(fake_bluetooth_ref_count(), 1);
     fake_bluetooth_connected(true);
     fake_bluetooth_resume_stop();
-    zassert_ok(await_prepare());
+    zassert_ok(await_prepare(false));
     zassert_equal(fake_bluetooth_ref_count(), 0);
     zassert_false(bluetooth_enabled());
 }
@@ -227,10 +304,10 @@ ZTEST(graceful, test_key_cancels_queued_stop_before_any_controller_command) {
     k_sem_reset(&service_release);
     zassert_true(k_work_submit_to_queue(&service_work_q, &service_blocker) >= 0);
     zassert_ok(k_sem_take(&service_blocked, K_MSEC(100)));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EINPROGRESS);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EINPROGRESS);
     unsigned int calls = fake_links_snapshot().bluetooth_enable_calls;
     zassert_ok(key_event(true));
-    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0), -EBUSY);
+    zassert_equal(defy_hybrid_peripheral_prepare_sleep(0, false), -EBUSY);
     k_sleep(K_MSEC(20));
     zassert_equal(fake_links_snapshot().bluetooth_enable_calls, calls);
     k_sem_give(&service_release);
